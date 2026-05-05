@@ -2,6 +2,7 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 from neural_network import Actor_critic_neural_network
 
@@ -243,7 +244,8 @@ def update(ac, buf, pi_optimizer, vf_optimizer, train_pi_iters=80,
 def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict(),
               steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2,
               pi_lr=3e-4, vf_lr=1e-3, train_pi_iters=80, train_v_iters=80,
-              lam=0.97, max_ep_len=1000, target_kl=0.01, save_freq=10, device=None):
+              lam=0.97, max_ep_len=1000, target_kl=0.01, save_freq=10, device=None,
+              log_dir='runs/ppo_experiment'):
     """
     Docstring for ppo_train:
     
@@ -272,6 +274,7 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
             for early stopping. (Usually small, 0.01 or 0.05.)
         save_freq (int): How often (in terms of gap between epochs) to save the current policy and value function.
         device: Device to use for training ('cuda', 'cpu', 'mps', or None for auto-detect).
+        log_dir: Directory to TensorBoard.
     """
     
     device = get_device(device)
@@ -280,6 +283,9 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
     
+    # Initialize TensorBoard
+    writer = SummaryWriter(log_dir=log_dir)
+
     # Create actor-critic module and move to device
     ac = actor_critic(obs_dim=obs_dim, act_dim=act_dim, **ac_kwargs)
     ac.to(device)
@@ -298,6 +304,11 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
 
     # Main loop: collect experience in env and update and log each epoch
     for epoch in range(epochs):
+
+        # Track lengths and returns for this epoch to average them
+
+        epoch_returns = []
+        epoch_lengths = []
         for t in range(local_steps_per_epoch):
             # Get action from policy
             # NOTE: ac.step() internally handles device placement
@@ -328,13 +339,26 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
                     v = 0
                 buf.finish_path(v.item())
                 if terminal:
-                    # Only save episode return if trajectory finished
+                    # Save episode return and length to average them at end of epoch
+                    epoch_returns.append(ep_ret)
+                    epoch_lengths.append(ep_len)
                     print(f'Episode {epoch}: return={ep_ret:.2f}, length={ep_len}')
                 o, ep_ret, ep_len = env.reset(), 0, 0 
 
         # Perform PPO update
         update_info = update(ac, buf, pi_optimizer, vf_optimizer, 
                            train_pi_iters, train_v_iters, target_kl, clip_ratio, device)
+        
+        # TensorBoard
+        if len(epoch_returns) > 0:
+            writer.add_scalar('Performance/Mean_Reward', np.mean(epoch_returns), epoch)
+            writer.add_scalar('Performance/Mean_Episode_Length', np.mean(epoch_lengths), epoch)
+            
+        writer.add_scalar('Loss/Policy_Loss', update_info['LossPi'], epoch)
+        writer.add_scalar('Loss/Value_Loss', update_info['LossV'], epoch)
+        writer.add_scalar('Training/KL_Divergence', update_info['KL'], epoch)
+        writer.add_scalar('Training/Entropy', update_info['Entropy'], epoch)
+        writer.add_scalar('Training/Clip_Fraction', update_info['ClipFrac'], epoch)
 
         # Log info about epoch
         print(f'\nEpoch: {epoch}')
@@ -350,6 +374,7 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
             torch.save(ac.state_dict(), f'checkpoints/ppo_epoch_{epoch}.pt')
             print(f'Model saved at epoch {epoch}')
 
+    writer.close()
     return ac
 
 
