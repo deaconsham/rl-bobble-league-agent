@@ -50,7 +50,6 @@ class Shared_memory_link:
             self.shm = shared_memory.SharedMemory(name=self.name, create=True, size=self.TOTAL_SIZE)
             self.shm.buf[:self.TOTAL_SIZE] = bytearray(self.TOTAL_SIZE)  # zero it out
         else:
-            # TODO: attach to the existing memory created by Godot
             self.shm = shared_memory.SharedMemory(name=self.name, create=False)
 
     def write_action(self, action):
@@ -58,7 +57,7 @@ class Shared_memory_link:
         Docstring for write_action:
 
         Args:
-            action: numpy array of 6 float32 values [f1_power, f1_angle, f2_power, f2_angle, f3_power, f3_angle]
+            action: numpy array of 6 float32 values [f1_x, f1_y, f2_x, f2_y, f3_x, f3_y]
         """
         # convert action to bytes and write to shared mem
         action_bytes = np.array(action, dtype=np.float32).tobytes()
@@ -97,7 +96,7 @@ class Shared_memory_link:
         """
         Docstring for request_step:
 
-        Tell Godot we want it to do a physics step.   deacon what is a physics step
+        Tell Godot we want it to do a physics step.
         """
         self.shm.buf[self.STEP_REQ_OFFSET] = 1
 
