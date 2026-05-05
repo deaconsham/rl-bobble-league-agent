@@ -86,17 +86,16 @@ public partial class DataManager : Node {
     }
 
     float[] TeamPositions(int team) {
-        int teamSize = players.GetChildCount() / 2;
-        float[] teamArray = new float[teamSize * 2];
+        float[] teamArray = new float[players.GetChildCount()];
 
-        for (int i = 0; i < players.GetChildCount(); i += 2) {
+        for (int i = 0; i < teamArray.Length; i += 2) {
             Player player = (Player)(players.GetChild(i)); // yeah bro because casting would totally save us from an error bro
             if (player.team == team) {
                 teamArray[i] = player.Position.X;
                 teamArray[i + 1] = player.Position.Z;
             }
         }
-
+        
         return teamArray;
     }
 
@@ -109,7 +108,7 @@ public partial class DataManager : Node {
         float[] positionArray = new float[ballPositionArray.Length + teamPositions.Length];
         Array.Copy(teamPositions, 0, positionArray, 0, teamPositions.Length);
         Array.Copy(ballPositionArray, 0, positionArray, teamPositions.Length, ballPositionArray.Length);
-
+        
         memory.WriteReward(reward);
         memory.SendStepResults(positionArray, 0, done);
     }

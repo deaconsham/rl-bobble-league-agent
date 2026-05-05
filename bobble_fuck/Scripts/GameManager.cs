@@ -200,11 +200,12 @@ public partial class GameManager : Node
     void Reset() {
         foreach (var node in players.GetChildren()) {
             var player = (Player)node; // yeah bro because casting would totally save us from an error bro again bro how many times do we have to tell you old man *farts*
-            player.QueueFree();
+            player.Free();
         }
         ball.AngularVelocity = Vector3.Zero;
         ball.LinearVelocity = Vector3.Zero;
         ball.Position = new Vector3(0, 0.5f, 0);
+        GD.Print("im going to kill myself.");
         Spawn();
     }
     
@@ -238,6 +239,10 @@ public partial class GameManager : Node
             
             players.AddChild(player);
         }
+        
+        
+
+        GD.Print(players.GetChildCount());
     }
 
     // can probably be a normal Process? idk man
@@ -274,6 +279,7 @@ public partial class GameManager : Node
 
         // Only process step requests if Python provides an action
         if (action != null) {
+            GD.Print("consume them");
             if (CurrentPlayMode == PlayMode.AI_VS_AI) {
                 ApplyRLAction(action);
                 isSimulating = true;

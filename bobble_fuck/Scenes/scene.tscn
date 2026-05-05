@@ -63,8 +63,10 @@ CurrentPlayMode = 1
 dataManager = NodePath("../DataManager")
 jumps_care = NodePath("../../Ui/TextureRect")
 
-[node name="DataManager" type="Node" parent="Managers" unique_id=759550437]
+[node name="DataManager" type="Node" parent="Managers" unique_id=759550437 node_paths=PackedStringArray("players", "ball")]
 script = ExtResource("3_fi6k0")
+players = NodePath("../../Dynamic/Players")
+ball = NodePath("../../Dynamic/Ball")
 
 [node name="Static" type="Node" parent="." unique_id=2067149681]
 
