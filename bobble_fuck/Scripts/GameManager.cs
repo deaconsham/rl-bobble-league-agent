@@ -32,7 +32,7 @@ public partial class GameManager : Node
     int scoreA = 0;
     int scoreB = 0;
 
-    DataManager dataManager;
+    [Export] DataManager dataManager;
     bool isSimulating = false;
     float stepReward = 0f;
     bool currentDone = false;

@@ -5,10 +5,12 @@
 [ext_resource type="Script" uid="uid://byauoubl5fvic" path="res://Scripts/PlayerSpawn.cs" id="2_f6sb3"]
 [ext_resource type="Script" uid="uid://bbeyt1aj45k8m" path="res://Scripts/TeamGoal.cs" id="2_mn0nn"]
 [ext_resource type="PackedScene" uid="uid://c5w5xc037a2gj" path="res://Scenes/player.tscn" id="2_u3cyc"]
+[ext_resource type="Script" uid="uid://bgeev8nl6wfcc" path="res://Scripts/DataManager.cs" id="3_fi6k0"]
 [ext_resource type="ArrayMesh" uid="uid://dxurrjvub31uu" path="res://Models/ICOBall.obj" id="4_fi6k0"]
 [ext_resource type="Script" uid="uid://x57bo1mj16e" path="res://Scripts/Ball.cs" id="5_mn0nn"]
 [ext_resource type="Script" uid="uid://dlkj0lhfl71uo" path="res://Scripts/GameManager.cs" id="6_6yy46"]
-[ext_resource type="Texture2D" uid="uid://crl5ti1q6m56p" path="res://Textures/istockphoto-1334434982-612x612.jpg" id="11_fi6k0"]
+[ext_resource type="Texture2D" uid="uid://cprro5aixexti" path="res://Texture/soccerball.jpg" id="9_mn0nn"]
+[ext_resource type="Texture2D" uid="uid://crl5ti1q6m56p" path="res://Texture/istockphoto-1334434982-612x612.jpg" id="11_fi6k0"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_f6sb3"]
 albedo_color = Color(7.123351e-06, 0.7028196, 0.9173508, 1)
@@ -27,11 +29,8 @@ size = Vector3(20, 5, 5.085)
 
 [sub_resource type="SphereShape3D" id="SphereShape3D_drvgu"]
 
-[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_f6sb3"]
-load_path = "res://.godot/imported/soccer-and-football-seamless-pattern-sport-ball-texture-football-background-black-and-white-pattern-with-soccer-geometric-hexagons-illustration-on-white-background-vector.jpg-b11ba113325a9c3d68f0fdfebf4e5b78.s3tc.ctex"
-
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_20iik"]
-albedo_texture = SubResource("CompressedTexture2D_f6sb3")
+albedo_texture = ExtResource("9_mn0nn")
 
 [sub_resource type="Gradient" id="Gradient_fi6k0"]
 colors = PackedColorArray(0, 0, 0, 0, 0.012617188, 0.012617188, 0.012617188, 0)
@@ -51,7 +50,7 @@ frame_1/duration = 1.0
 
 [node name="Managers" type="Node" parent="." unique_id=1983326300]
 
-[node name="GameManager" type="Node" parent="Managers" unique_id=1968845109 node_paths=PackedStringArray("camera", "players", "ball", "spawns", "jumps_care")]
+[node name="GameManager" type="Node" parent="Managers" unique_id=1968845109 node_paths=PackedStringArray("camera", "players", "ball", "spawns", "dataManager", "jumps_care")]
 script = ExtResource("6_6yy46")
 camera = NodePath("../../Static/Camera3D")
 players = NodePath("../../Dynamic/Players")
@@ -63,9 +62,11 @@ TeamA = SubResource("StandardMaterial3D_f6sb3")
 TeamB = SubResource("StandardMaterial3D_mn0nn")
 PlayerPrefab = ExtResource("2_u3cyc")
 CurrentPlayMode = 2
+dataManager = NodePath("../DataManager")
 jumps_care = NodePath("../../Ui/TextureRect")
 
 [node name="DataManager" type="Node" parent="Managers" unique_id=759550437]
+script = ExtResource("3_fi6k0")
 
 [node name="Static" type="Node" parent="." unique_id=2067149681]
 
