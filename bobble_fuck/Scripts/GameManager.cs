@@ -7,9 +7,10 @@ public partial class GameManager : Node
     [Export] Camera3D camera;
     [Export] Node players;
     [Export] RigidBody3D ball;
-    [Export] float selectDistance;
-    [Export] float dragDistance;
-    Player launchPlayer = null;
+    [Export] float selectDistance = 5f;
+    [Export] float dragDistance = 2f;
+    
+    Player launchPlayer;
     
     [Export] Node spawns;
 
@@ -24,18 +25,18 @@ public partial class GameManager : Node
     }
 
     [Export] public PlayMode CurrentPlayMode;
-    bool humanWaitingForAI = false;
+    bool humanWaitingForAI;
 
     int turn = 1;
     int currentTeam = 1;
 
-    int scoreA = 0;
-    int scoreB = 0;
+    int scoreA;
+    int scoreB;
 
     [Export] DataManager dataManager;
-    bool isSimulating = false;
-    float stepReward = 0f;
-    bool currentDone = false;
+    bool isSimulating;
+    float stepReward;
+    bool currentDone;
 
     public override void _Input(InputEvent @event) {
         if (@event is InputEventMouseButton mouseButton) {
@@ -256,7 +257,6 @@ public partial class GameManager : Node
 
         // For human vs ai mode, we don't want to consume Python's step request until the human has submitted their turn.
         if (CurrentPlayMode == PlayMode.HUMAN_VS_AI && !humanWaitingForAI) {
-            bool resetReq;
             return;
         }
 

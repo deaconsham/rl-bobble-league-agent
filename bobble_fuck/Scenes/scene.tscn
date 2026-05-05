@@ -55,13 +55,11 @@ script = ExtResource("6_6yy46")
 camera = NodePath("../../Static/Camera3D")
 players = NodePath("../../Dynamic/Players")
 ball = NodePath("../../Dynamic/Ball")
-selectDistance = 5.0
-dragDistance = 2.0
 spawns = NodePath("../../Static/PlayerSpawns")
 TeamA = SubResource("StandardMaterial3D_f6sb3")
 TeamB = SubResource("StandardMaterial3D_mn0nn")
 PlayerPrefab = ExtResource("2_u3cyc")
-CurrentPlayMode = 2
+CurrentPlayMode = 1
 dataManager = NodePath("../DataManager")
 jumps_care = NodePath("../../Ui/TextureRect")
 
