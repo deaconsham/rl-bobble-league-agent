@@ -80,9 +80,9 @@ public partial class DataManager : Node {
     [Export] Node players;
     [Export] RigidBody3D ball;
 
-    public void Export(bool done = false, float reward = 0f) {
+    public void Export(bool done = false, float reward = 0f, bool reset = false) {
         // the scores can be included maybe idk will have to fist myself before i know
-        SendToMemory(TeamPositions(1), TeamPositions(2), new Vector2(ball.Position.X, ball.Position.Z), done);
+        SendToMemory(TeamPositions(1), TeamPositions(2), new Vector2(ball.Position.X, ball.Position.Z), done, reward, reset);
     }
 
     float[] TeamPositions(int team) {
@@ -99,7 +99,7 @@ public partial class DataManager : Node {
         return teamArray;
     }
 
-    unsafe void SendToMemory(float[] teamAPositions, float[] teamBPositions, Vector2 ballPosition, bool done = false, float reward = 0f) {
+    unsafe void SendToMemory(float[] teamAPositions, float[] teamBPositions, Vector2 ballPosition, bool done = false, float reward = 0f, bool reset = false) {
         float[] teamPositions = new float[teamAPositions.Length + teamBPositions.Length];
         Array.Copy(teamAPositions, 0, teamPositions, 0, teamAPositions.Length);
         Array.Copy(teamBPositions, 0, teamPositions, teamAPositions.Length, teamBPositions.Length);
@@ -110,7 +110,15 @@ public partial class DataManager : Node {
         Array.Copy(ballPositionArray, 0, positionArray, teamPositions.Length, ballPositionArray.Length);
         
         memory.WriteReward(reward);
-        memory.SendStepResults(positionArray, 0, done);
+
+        if (reset)
+        {
+            memory.SendResetResults(positionArray);
+        }
+        else
+        {
+            memory.SendStepResults(positionArray, reward, done);
+        }
     }
 
     unsafe void Import() {

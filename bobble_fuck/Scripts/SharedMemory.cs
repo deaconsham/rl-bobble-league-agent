@@ -119,6 +119,7 @@ public class SharedMemory {
 
     // sends everything back to python after a step
     public void SendStepResults(float[] observation, float reward, bool done) {
+        GD.Print("FUCKKKK");
         WriteObservation(observation);
         WriteReward(reward);
         WriteDone(done);

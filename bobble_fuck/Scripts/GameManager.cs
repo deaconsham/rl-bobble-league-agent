@@ -270,7 +270,7 @@ public partial class GameManager : Node
 
         if (resetRequested) {
             Reset();
-            dataManager.Export();
+            dataManager.Export(false, stepReward, true);
             stepReward = 0;
             currentDone = false;
             humanWaitingForAI = false;
