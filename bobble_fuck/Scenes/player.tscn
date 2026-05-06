@@ -33,6 +33,7 @@ launchForce = 150.0
 kickForceCoefficient = 3.0
 verticallKickForce = 0.5
 kickSpeedThreshold = 5.0
+speedThreshold = 0.3
 baseWidth = 0.15
 baseWidthCoef = 1.0
 tipSize = 0.1
