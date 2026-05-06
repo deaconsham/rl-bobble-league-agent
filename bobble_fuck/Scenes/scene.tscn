@@ -152,7 +152,7 @@ max_contacts_reported = 1
 linear_damp = 0.3
 angular_damp = 0.2
 script = ExtResource("5_mn0nn")
-forfuckssake = 0.2
+speedThreshold = 0.3
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Dynamic/Ball" unique_id=986913239]
 shape = SubResource("SphereShape3D_drvgu")

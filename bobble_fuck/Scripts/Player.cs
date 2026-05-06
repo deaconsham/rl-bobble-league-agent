@@ -25,7 +25,8 @@ public partial class Player : RigidBody3D
     bool hidden = true;
 
     public void Launch() {
-        ApplyImpulse(input.Normalized() * launchForce);
+        Vector3 inputNorm = input.Normalized();
+        LinearVelocity = new Vector3(inputNorm.X, 0, inputNorm.Z) * launchForce;
         
         if (input.Length() > 0) {
             float angle = Mathf.Atan2(input.X, input.Z);
@@ -78,10 +79,10 @@ public partial class Player : RigidBody3D
     }
     
     public override void _PhysicsProcess(double delta) {
-        if (new Vector2(LinearVelocity.X, LinearVelocity.Z).Length() < speedThreshold) {
+        if (LinearVelocity.Length() < speedThreshold) {
             LinearVelocity = new Vector3(0, 0, 0);
-            Position = new Vector3(Position.X, 0.5f, Position.Z);
             AngularVelocity = new Vector3(0, 0, 0);
         }
+        
     }
 }
