@@ -10,6 +10,7 @@ public partial class Player : RigidBody3D
     [Export] float kickForceCoefficient; // name implies scaling with speed but not currently
     [Export] float verticallKickForce;
     [Export] float kickSpeedThreshold;
+    [Export] float speedThreshold;
 
     [ExportGroup("Visuals")] 
     [Export] float baseWidth;
@@ -75,6 +76,14 @@ public partial class Player : RigidBody3D
                 ball.ApplyCentralImpulse(launchVector);
                 GD.Print("kick performed");
             }
+        }
+    }
+    
+    public override void _PhysicsProcess(double delta) {
+        if (new Vector2(LinearVelocity.X, LinearVelocity.Z).Length() < speedThreshold) {
+            LinearVelocity = new Vector3(0, 0, 0);
+            Position = new Vector3(Position.X, 0.5f, Position.Z);
+            AngularVelocity = new Vector3(0, 0, 0);
         }
     }
 }
