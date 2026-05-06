@@ -100,7 +100,7 @@ class Shared_memory_link:
         """
         self.shm.buf[self.STEP_REQ_OFFSET] = 1
 
-    def wait_for_step(self, timeout=10.0):
+    def wait_for_step(self, timeout=100000.0):
         """
         Docstring for wait_for_step:
 
@@ -123,7 +123,7 @@ class Shared_memory_link:
         """
         self.shm.buf[self.RESET_REQ_OFFSET] = 1
 
-    def wait_for_reset(self, timeout=10.0):
+    def wait_for_reset(self, timeout=100000.0):
         """
         Docstring for wait_for_reset:
 

@@ -185,7 +185,7 @@ public partial class GameManager : Node
             // Getting scored on is -1 reward
             stepReward -= 1.0f;
         }
-        GD.Print("team: " + team + "scored"); // soooo orangy
+        GD.Print("team: " + team + " scored"); // soooo orangy
         Reset();
         jumps_care.SetVisible(true);
         if (jumps_care.Texture is AnimatedTexture animatedTexture) {
@@ -205,7 +205,6 @@ public partial class GameManager : Node
         ball.AngularVelocity = Vector3.Zero;
         ball.LinearVelocity = Vector3.Zero;
         ball.Position = new Vector3(0, 0.5f, 0);
-        GD.Print("im going to kill myself.");
         Spawn();
     }
     
@@ -279,12 +278,15 @@ public partial class GameManager : Node
 
         // Only process step requests if Python provides an action
         if (action != null) {
-            GD.Print("consume them");
             if (CurrentPlayMode == PlayMode.AI_VS_AI) {
                 ApplyRLAction(action);
                 isSimulating = true;
             } 
             else if (CurrentPlayMode == PlayMode.HUMAN_VS_AI) {
+                foreach (float erm in action)
+                {
+                    GD.Print(erm);
+                }
                 // Apply ai's predicted actions ONLY to Team B
                 ApplyRLActionHalf(action, 2);
                 
@@ -329,16 +331,12 @@ public partial class GameManager : Node
     void ApplyRLActionHalf(float[] action, int teamTarget) {
         int actionIdx = 0;
         foreach (Node node in players.GetChildren()) {
-            if (node.IsQueuedForDeletion()) continue;
             if (node is Player player) {
-                if (actionIdx < action.Length) {
+                if (actionIdx < action.Length && player.team == teamTarget) {
                     float x = action[actionIdx];
                     float y = action[actionIdx + 1];
                     actionIdx += 2;
-                    
-                    if (player.team == teamTarget) {
-                        player.input = new Vector3(x, 0, y);
-                    }
+                    player.input = new Vector3(x, 0, y);
                 }
             }
         }

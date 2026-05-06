@@ -67,13 +67,11 @@ public partial class Player : RigidBody3D
     }
 
     void Kick(Node3D node) {
-        GD.Print(LinearVelocity);
         if (node.IsInGroup("ball")) {
             RigidBody3D ball  = (RigidBody3D)node;
             if ((this.LinearVelocity - ball.LinearVelocity).Length() > kickSpeedThreshold) {
                 Vector3 launchVector = LinearVelocity.Normalized() * kickForceCoefficient + new Vector3(0, verticallKickForce, 0);
                 ball.ApplyCentralImpulse(launchVector);
-                GD.Print("kick performed");
             }
         }
     }
