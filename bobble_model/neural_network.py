@@ -1,8 +1,21 @@
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions import Normal, Independent
 
-def neural_network(sizes, activation = nn.Tanh):
+def ortho_init(layer, gain):
+    """
+    Docstring for ortho_init
+
+    Orthogonal init on one Linear layer (weights by gain, bias to zero). This is
+    the PPO default from "The 37 Implementation Details of PPO": it keeps the
+    activations well scaled so the policy does not start off saturated.
+    """
+    nn.init.orthogonal_(layer.weight, gain)
+    nn.init.zeros_(layer.bias)
+    return layer
+
+def neural_network(sizes, activation = nn.Tanh, hidden_gain=None, out_gain=None):
     """
     Docstring for neural_network
 
@@ -10,12 +23,23 @@ def neural_network(sizes, activation = nn.Tanh):
     
     :param sizes: List of integers defining the number of neurons in each layer
     :param activation: Activation function used between layers
+    :param hidden_gain: orthogonal gain for the hidden Linear layers (None skips init)
+    :param out_gain: orthogonal gain for the final Linear layer (None skips init)
     :return: A neural network
     """
     layers = []
     for i in range(len(sizes) - 1):
-        layers.append(nn.Linear(sizes[i], sizes[i + 1]))
-        if i < len(sizes) - 2:
+        linear = nn.Linear(sizes[i], sizes[i + 1])
+        is_last = i == len(sizes) - 2
+        # orthogonal init: hidden layers use sqrt(2), the output head its own gain
+        if is_last:
+            if out_gain is not None:
+                ortho_init(linear, out_gain)
+        else:
+            if hidden_gain is not None:
+                ortho_init(linear, hidden_gain)
+        layers.append(linear)
+        if not is_last:
             layers.append(activation())
     return nn.Sequential(*layers)
 
@@ -35,8 +59,14 @@ class Actor_critic_neural_network(nn.Module):
     def __init__(self, obs_dim=14, act_dim=6, hidden=[256, 256]):
         super().__init__()
 
-        self.pi_net = neural_network([obs_dim] + hidden + [act_dim])
-        self.v_net = neural_network([obs_dim] + hidden + [1])
+        # orthogonal init (PPO default): sqrt(2) on the hidden layers, a small 0.01
+        # on the policy head so the first actions are near zero (gentle start), and
+        # 1.0 on the value head.
+        root_two = float(np.sqrt(2))
+        self.pi_net = neural_network([obs_dim] + hidden + [act_dim],
+                                     hidden_gain=root_two, out_gain=0.01)
+        self.v_net = neural_network([obs_dim] + hidden + [1],
+                                    hidden_gain=root_two, out_gain=1.0)
         self.log_std = nn.Parameter(-0.5 * torch.ones(act_dim))
     
     def forward(self, obs):

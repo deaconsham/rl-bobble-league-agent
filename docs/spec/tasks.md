@@ -48,14 +48,14 @@ library API names unchanged.
 
 ## Phase 3: PPO fixes
 
-- [ ] 3.1 Minibatch SGD in `update`: shuffle, 256-size minibatches, 10 passes; replace the 80 full-batch steps. (R18)
-- [ ] 3.2 Keep KL early stop but per pass, `target_kl` 0.02-0.03. (R19)
-- [ ] 3.3 Entropy bonus: `loss_pi - ent_coef * entropy`, `ent_coef = 0.005`. (R20)
-- [ ] 3.4 `clip_grad_norm_(params, 0.5)` for both nets. (R21)
-- [ ] 3.5 Linear LR decay to 0 over the run (schedule step saved for resume). (R22)
-- [ ] 3.6 Orthogonal init in `neural_network.py`: sqrt(2) hidden, 0.01 policy head, 1.0 value head. (R23)
-- [ ] 3.7 Log `approx_kl`, clip fraction and explained variance to TensorBoard. (R24)
-- [ ] 3.8 **Test (T1, T3):** T1 one update on fake data (finite losses, KL + clip fraction in range, grads clipped, LR decays); T3 after ~30 min: KL early stop not at ~step 5, entropy falls steadily, vs-chaser win rate rises faster than the 200-epoch run. (R25, R48, R49, R51)
+- [x] 3.1 Minibatch SGD in `update`: shuffle, 256-size minibatches, 10 passes; replace the 80 full-batch steps. (R18)
+- [x] 3.2 Keep KL early stop but per pass, `target_kl` 0.02-0.03. (R19)
+- [x] 3.3 Entropy bonus: `loss_pi - ent_coef * entropy`, `ent_coef = 0.005`. (R20)
+- [x] 3.4 `clip_grad_norm_(params, 0.5)` for both nets. (R21)
+- [x] 3.5 Linear LR decay to 0 over the run (schedule step saved for resume). (R22)
+- [x] 3.6 Orthogonal init in `neural_network.py`: sqrt(2) hidden, 0.01 policy head, 1.0 value head. (R23)
+- [x] 3.7 Log `approx_kl`, clip fraction and explained variance to TensorBoard. (R24)
+- [x] 3.8 **Test (T1, T3):** T1 one update on fake data (finite losses, KL + clip fraction in range, grads clipped, LR decays); T3 after ~30 min: KL early stop not at ~step 5, entropy falls steadily, vs-chaser win rate rises faster than the 200-epoch run. (R25, R48, R49, R51)
 
 ---
 

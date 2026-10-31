@@ -165,11 +165,12 @@ def compute_loss_pi(ac, data, clip_ratio=0.2):
     
     # Useful extra info for logging
     approx_kl = (logp_old - logp).mean().item()  # Approximate KL divergence
-    ent = pi.entropy().mean().item()  # Policy entropy
+    ent_tensor = pi.entropy().mean()  # Policy entropy (tensor, for the entropy bonus)
+    ent = ent_tensor.item()
     clipped = ratio.gt(1 + clip_ratio) | ratio.lt(1 - clip_ratio)
     clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
     
-    pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+    pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac, ent_tensor=ent_tensor)
     
     return loss_pi, pi_info
 
@@ -193,61 +194,88 @@ def compute_loss_v(ac, data):
     # MSE loss
     return ((value - ret) ** 2).mean()
 
-def update(ac, buf, pi_optimizer, vf_optimizer, train_pi_iters=80, 
-           train_v_iters=80, target_kl=0.01, clip_ratio=0.2, device='cpu'):
+
+def explained_variance(values, returns):
     """
-    Perform PPO update on policy and value function
-    
+    Docstring for explained_variance:
+
+    How much of the return variance the critic explains: 1 - Var(ret - V) / Var(ret).
+    1 is a perfect fit, 0 is no better than guessing the mean, below 0 is worse.
+    Takes torch tensors or numpy arrays.
+    """
+    v = values.detach().cpu().numpy() if isinstance(values, torch.Tensor) else np.asarray(values)
+    r = returns.detach().cpu().numpy() if isinstance(returns, torch.Tensor) else np.asarray(returns)
+    var_r = np.var(r)
+    if var_r == 0:
+        return 0.0
+    return float(1 - np.var(r - v) / var_r)
+
+
+class Linear_lr_schedule:
+    """
+    Docstring for Linear_lr_schedule class:
+
+    Linear learning-rate decay to 0 over the whole run. One schedule drives both
+    optimizers from their own starting LRs. 'step' is the number of updates done so
+    far (0-based), 'total' is the planned number of updates (epochs). The fraction
+    left is (total - step) / total, so the last update runs at ~0.
+
+    The step is saved in the checkpoint (lr_step) and restored on resume, so the
+    LR picks up exactly where it left off instead of snapping back to full.
+    """
+
+    def __init__(self, optimizers, base_lrs, total, step=0):
+        self.optimizers = list(optimizers)
+        self.base_lrs = list(base_lrs)
+        self.total = max(1, int(total))
+        self.step_count = int(step)
+        self.apply()
+
+    def frac_left(self):
+        """fraction of the run still to go, clamped to [0, 1]."""
+        left = (self.total - self.step_count) / self.total
+        return max(0.0, min(1.0, left))
+
+    def current_lrs(self):
+        """the LRs the schedule wants right now (one per optimizer)."""
+        f = self.frac_left()
+        return [base * f for base in self.base_lrs]
+
+    def apply(self):
+        """write the current LRs onto the optimizers' param groups."""
+        for opt, lr in zip(self.optimizers, self.current_lrs()):
+            for group in opt.param_groups:
+                group['lr'] = lr
+
+    def advance(self):
+        """call once per update (after it) to move one step down the ramp."""
+        self.step_count += 1
+        self.apply()
+
+def update(ac, buf, pi_optimizer, vf_optimizer, train_pi_iters=80, 
+           train_v_iters=80, target_kl=0.02, clip_ratio=0.2, device='cpu',
+           minibatch_size=256, n_passes=10, ent_coef=0.005, max_grad_norm=0.5):
+    """
+    Perform a PPO update on a single full buffer.
+
+    Thin wrapper: pulls the buffer (advantages normalized for the single-game
+    case) and hands it to update_from_data, so the minibatch + entropy + grad-clip
+    + LR logic lives in one place (Phase 3).
+
     Args:
         ac: actor-critic model
         buf: PPO_buffer with trajectory data
-        pi_optimizer: optimizer for policy network
-        vf_optimizer: optimizer for value network
-        train_pi_iters: number of gradient steps for policy
-        train_v_iters: number of gradient steps for value function
-        target_kl: early stopping threshold for KL divergence
-        clip_ratio: epsilon for ppo clipping
-        device: device to use for computation
-    
-    Multiple epochs of gradient descent on the same batch of data, but use clipping to prevent too large updates
+        pi_optimizer, vf_optimizer: the two optimizers
+        target_kl: per-pass KL early-stop threshold
+        clip_ratio: epsilon for PPO clipping
+        device: device for the tensors
+        minibatch_size, n_passes, ent_coef, max_grad_norm: Phase 3 knobs
     """
     data = buf.get(device=device)
-
-    pi_l_old, pi_info_old = compute_loss_pi(ac, data, clip_ratio)
-    v_l_old = compute_loss_v(ac, data).item()
-
-    # Train policy with multiple steps of gradient descent
-    for i in range(train_pi_iters):
-        pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(ac, data, clip_ratio)
-        kl = pi_info['kl']
-        
-        # Early stopping if KL divergence gets too large
-        # If the policy changed too much then stop updating
-        if kl > 1.5 * target_kl:
-            print(f'Early stopping at step {i} due to reaching max kl.')
-            break
-            
-        loss_pi.backward()
-        pi_optimizer.step()
-
-    # Train value function with multiple steps of gradient descent  
-    for i in range(train_v_iters):
-        vf_optimizer.zero_grad()
-        loss_v = compute_loss_v(ac, data)
-        loss_v.backward()
-        vf_optimizer.step()
-
-    # Log changes from update
-    kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
-    
-    return dict(
-        LossPi=pi_l_old.item(),
-        LossV=v_l_old,
-        KL=kl,
-        Entropy=ent,
-        ClipFrac=cf
-    )
+    return update_from_data(ac, data, pi_optimizer, vf_optimizer, train_pi_iters,
+                            train_v_iters, target_kl, clip_ratio,
+                            minibatch_size=minibatch_size, n_passes=n_passes,
+                            ent_coef=ent_coef, max_grad_norm=max_grad_norm)
 
 
 def rng_state():
@@ -386,10 +414,11 @@ class _Single_env_as_vector:
 def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=dict(),
               steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2,
               pi_lr=3e-4, vf_lr=1e-3, train_pi_iters=80, train_v_iters=80,
-              lam=0.97, max_ep_len=1000, target_kl=0.01, save_freq=10, device=None,
+              lam=0.97, max_ep_len=1000, target_kl=0.02, save_freq=10, device=None,
               log_dir='runs/ppo_experiment', opponent='self', snapshot_freq=5,
               init_checkpoint=None, reward_config=None, step_timeout=120.0,
-              games=1, launcher=None, vec_env=None, resume=None):
+              games=1, launcher=None, vec_env=None, resume=None,
+              minibatch_size=256, n_passes=10, ent_coef=0.005, max_grad_norm=0.5):
     """
     Docstring for ppo_train:
 
@@ -463,6 +492,7 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     vf_optimizer = Adam(ac.v_net.parameters(), lr=vf_lr)
 
     start_epoch = 0
+    resumed_lr_step = 0
     if resume:
         ckpt = load_checkpoint(resume, map_location=device)
         ac.load_state_dict(ckpt['model'])
@@ -474,13 +504,20 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
             shared_pool.load_state(ckpt['pool'])
         set_rng_state(ckpt.get('rng'))
         start_epoch = int(ckpt.get('epoch', -1)) + 1
-        print(f'Resumed from {resume} at epoch {start_epoch} (lr_step {ckpt.get("lr_step", 0)})')
+        resumed_lr_step = int(ckpt.get('lr_step', start_epoch))
+        print(f'Resumed from {resume} at epoch {start_epoch} (lr_step {resumed_lr_step})')
     elif init_checkpoint:
         from opponents import load_state_dict
         ac.load_state_dict(load_state_dict(init_checkpoint))
         print(f'Loaded weights from {init_checkpoint}')
         if shared_pool is not None:
             shared_pool.add(ac.state_dict())
+
+    # ---- linear LR decay to 0 over the run (one update per epoch) ----
+    # step is restored from the checkpoint so a resumed run keeps decaying from
+    # where it left off instead of snapping back to the full LR.
+    lr_schedule = Linear_lr_schedule([pi_optimizer, vf_optimizer], [pi_lr, vf_lr],
+                                     total=epochs, step=resumed_lr_step)
 
     # ---- per-game buffers: steps split evenly, GAE paths stay separate ----
     per_game = max(1, steps_per_epoch // n_games)
@@ -542,7 +579,11 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         # join per-game buffers, normalize advantages over the whole batch, update
         data = join_and_normalize(buffers, device=device)
         update_info = update_from_data(ac, data, pi_optimizer, vf_optimizer,
-                                       train_pi_iters, train_v_iters, target_kl, clip_ratio)
+                                       train_pi_iters, train_v_iters, target_kl, clip_ratio,
+                                       minibatch_size=minibatch_size, n_passes=n_passes,
+                                       ent_coef=ent_coef, max_grad_norm=max_grad_norm)
+        # LR before stepping the schedule is the LR this update actually ran at
+        cur_lr = lr_schedule.current_lrs()[0]
 
         # TensorBoard
         if epoch_returns:
@@ -556,6 +597,9 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         writer.add_scalar('Training/KL_Divergence', update_info['KL'], epoch)
         writer.add_scalar('Training/Entropy', update_info['Entropy'], epoch)
         writer.add_scalar('Training/Clip_Fraction', update_info['ClipFrac'], epoch)
+        writer.add_scalar('Training/Explained_Variance', update_info['ExplainedVariance'], epoch)
+        writer.add_scalar('Training/Passes_Run', update_info['PassesRun'], epoch)
+        writer.add_scalar('Training/Learning_Rate', cur_lr, epoch)
         writer.add_scalar('Training/Restarts', restarts, epoch)
 
         print(f'\nEpoch: {epoch}')
@@ -563,7 +607,11 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
               f"restarts {restarts}")
         print(f"LossPi: {update_info['LossPi']:.4f}  LossV: {update_info['LossV']:.4f}  "
               f"KL: {update_info['KL']:.4f}  Entropy: {update_info['Entropy']:.4f}  "
-              f"ClipFrac: {update_info['ClipFrac']:.4f}\n")
+              f"ClipFrac: {update_info['ClipFrac']:.4f}  EV: {update_info['ExplainedVariance']:.3f}  "
+              f"passes: {update_info['PassesRun']}  lr: {cur_lr:.2e}\n")
+
+        # step the LR ramp down one notch for the next epoch
+        lr_schedule.advance()
 
         # self-play: let the shared pool catch up with the learner
         if shared_pool is not None and (epoch + 1) % snapshot_freq == 0:
@@ -574,7 +622,8 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
             os.makedirs('checkpoints', exist_ok=True)
             save_checkpoint(f'checkpoints/ppo_epoch_{epoch}.pt', ac, pi_optimizer,
-                            vf_optimizer, epoch, lr_step=epoch, opponent=shared_pool)
+                            vf_optimizer, epoch, lr_step=lr_schedule.step_count,
+                            opponent=shared_pool)
             print(f'Model saved at epoch {epoch}')
 
     writer.close()
@@ -583,38 +632,87 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
 
 
 def update_from_data(ac, data, pi_optimizer, vf_optimizer, train_pi_iters=80,
-                     train_v_iters=80, target_kl=0.01, clip_ratio=0.2):
+                     train_v_iters=80, target_kl=0.02, clip_ratio=0.2,
+                     minibatch_size=256, n_passes=10, ent_coef=0.005,
+                     max_grad_norm=0.5):
     """
     Docstring for update_from_data:
 
-    Same PPO update as update(), but takes a prepared data dict (already joined
-    across games and advantage-normalized) instead of a single buffer.
+    PPO update with minibatch SGD (Phase 3). Takes a prepared data dict (already
+    joined across games and advantage-normalized).
+
+    Each "pass" is one sweep over the whole batch in shuffled minibatches of
+    'minibatch_size'. We run up to 'n_passes' passes (replacing the old 80
+    full-batch steps). On each minibatch:
+      - policy loss = clipped surrogate - ent_coef * entropy (entropy bonus),
+      - value loss on the same minibatch,
+      - gradients clipped to max_grad_norm (0.5) for both nets before stepping.
+    KL early stop is checked per pass (on the whole batch), with target_kl 0.02.
+    train_pi_iters / train_v_iters are kept for signature compatibility but the
+    minibatch schedule (n_passes) drives the loop now.
+
+    Returns diagnostics: losses, approx_kl, clip fraction, entropy, explained
+    variance and how many passes actually ran.
     """
-    pi_l_old, pi_info_old = compute_loss_pi(ac, data, clip_ratio)
-    v_l_old = compute_loss_v(ac, data).item()
+    n = data['obs'].shape[0]
+    mb = min(minibatch_size, n)
 
-    pi_info = pi_info_old
-    for i in range(train_pi_iters):
-        pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(ac, data, clip_ratio)
-        if pi_info['kl'] > 1.5 * target_kl:
-            print(f'Early stopping at step {i} due to reaching max kl.')
+    # old losses + the pre-update KL (0 by definition) for logging
+    with torch.no_grad():
+        pi_l_old, pi_info_old = compute_loss_pi(ac, data, clip_ratio)
+        v_l_old = compute_loss_v(ac, data).item()
+
+    last_kl = pi_info_old['kl']
+    last_cf = pi_info_old['cf']
+    last_ent = pi_info_old['ent']
+    passes_run = 0
+
+    for p in range(n_passes):
+        # KL early stop, per pass, on the whole batch
+        with torch.no_grad():
+            _, full_info = compute_loss_pi(ac, data, clip_ratio)
+        last_kl, last_cf, last_ent = full_info['kl'], full_info['cf'], full_info['ent']
+        if last_kl > 1.5 * target_kl:
+            print(f'Early stopping at pass {p} due to reaching max kl ({last_kl:.4f}).')
             break
-        loss_pi.backward()
-        pi_optimizer.step()
 
-    for _ in range(train_v_iters):
-        vf_optimizer.zero_grad()
-        loss_v = compute_loss_v(ac, data)
-        loss_v.backward()
-        vf_optimizer.step()
+        # shuffle and sweep in minibatches
+        idx = torch.randperm(n, device=data['obs'].device)
+        for start in range(0, n, mb):
+            mb_idx = idx[start:start + mb]
+            mb_data = {k: v[mb_idx] for k, v in data.items()}
+
+            # policy step with entropy bonus
+            pi_optimizer.zero_grad()
+            loss_pi, pi_info = compute_loss_pi(ac, mb_data, clip_ratio)
+            loss_pi = loss_pi - ent_coef * pi_info['ent_tensor']
+            loss_pi.backward()
+            torch.nn.utils.clip_grad_norm_(
+                list(ac.pi_net.parameters()) + [ac.log_std], max_grad_norm)
+            pi_optimizer.step()
+
+            # value step
+            vf_optimizer.zero_grad()
+            loss_v = compute_loss_v(ac, mb_data)
+            loss_v.backward()
+            torch.nn.utils.clip_grad_norm_(ac.v_net.parameters(), max_grad_norm)
+            vf_optimizer.step()
+
+        passes_run += 1
+
+    # explained variance of the critic over the whole batch after the update
+    with torch.no_grad():
+        _, values_now = ac(data['obs'])
+    ev = explained_variance(values_now, data['ret'])
 
     return dict(
         LossPi=pi_l_old.item(),
         LossV=v_l_old,
-        KL=pi_info['kl'],
-        Entropy=pi_info_old['ent'],
-        ClipFrac=pi_info['cf'],
+        KL=last_kl,
+        Entropy=last_ent,
+        ClipFrac=last_cf,
+        ExplainedVariance=ev,
+        PassesRun=passes_run,
     )
 
 
@@ -643,6 +741,13 @@ if __name__ == '__main__':
     parser.add_argument('--project', default=None, help='bobble_league project path (with --launch)')
     parser.add_argument('--shm-prefix', default=None, help='folder for per-game shm files (with --launch)')
     parser.add_argument('--timescale', type=int, default=32, help='AI_VS_AI time scale (with --launch)')
+    # ---- phase 3: PPO fixes (minibatch, KL, entropy, grad clip) ----
+    parser.add_argument('--target-kl', type=float, default=0.02,
+                        help='per-pass KL early-stop threshold (0.02-0.03)')
+    parser.add_argument('--ent-coef', type=float, default=0.005, help='entropy bonus coefficient')
+    parser.add_argument('--minibatch-size', type=int, default=256, help='SGD minibatch size')
+    parser.add_argument('--n-passes', type=int, default=10, help='passes over the batch per update')
+    parser.add_argument('--max-grad-norm', type=float, default=0.5, help='gradient clip norm for both nets')
     args = parser.parse_args()
 
     launcher = None
@@ -663,4 +768,9 @@ if __name__ == '__main__':
               save_freq=args.save_freq,
               games=args.games,
               launcher=launcher,
-              resume=args.resume)
+              resume=args.resume,
+              target_kl=args.target_kl,
+              ent_coef=args.ent_coef,
+              minibatch_size=args.minibatch_size,
+              n_passes=args.n_passes,
+              max_grad_norm=args.max_grad_norm)
