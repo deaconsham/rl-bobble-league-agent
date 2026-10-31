@@ -245,14 +245,16 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
               steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2,
               pi_lr=3e-4, vf_lr=1e-3, train_pi_iters=80, train_v_iters=80,
               lam=0.97, max_ep_len=1000, target_kl=0.01, save_freq=10, device=None,
-              log_dir='runs/ppo_experiment'):
+              log_dir='runs/ppo_experiment', opponent='self', snapshot_freq=5,
+              init_checkpoint=None, reward_config=None, step_timeout=120.0):
     """
     Docstring for ppo_train:
     
     Proximal policy optimization (PPO-Clip) training loop (copied argument definitions from OpenAI)
 
     Args:
-        env_fn : A function which creates a copy of the environment.
+        env_fn : A function which creates a copy of the environment. Called as
+            env_fn(opponent=..., reward_config=..., max_ep_len=..., step_timeout=...).
         actor_critic: The constructor method for a PyTorch Module with an ``act`` method and ``pi`` module and ``v`` module.
         ac_kwargs (dict): Any kwargs appropriate for the actor_critic.
         steps_per_epoch (int): Number of steps of interaction (state-action pairs) for the agent and the environment in each epoch.
@@ -275,11 +277,21 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
         save_freq (int): How often (in terms of gap between epochs) to save the current policy and value function.
         device: Device to use for training ('cuda', 'cpu', 'mps', or None for auto-detect).
         log_dir: Directory to TensorBoard.
+        opponent: 'self' (self-play pool), 'chaser', 'random', 'still', 'none', or a checkpoint path.
+            Only used when Godot runs AI_VS_AI.
+        snapshot_freq (int): With opponent='self', add the learner to the pool every N epochs.
+        init_checkpoint: Optional checkpoint to start from (continue training).
+        reward_config: bobble_fuck_env.RewardConfig for reward shaping.
+        step_timeout: Seconds to wait for Godot per turn.
     """
-    
+    from opponents import make_opponent, SelfPlayPool, load_state_dict
+
     device = get_device(device)
     print(f'Using device: {device}')
-    env = env_fn()
+
+    opp = make_opponent(opponent)
+    env = env_fn(opponent=opp, reward_config=reward_config, max_ep_len=max_ep_len,
+                 step_timeout=step_timeout)
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
     
@@ -288,7 +300,13 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
 
     # Create actor-critic module and move to device
     ac = actor_critic(obs_dim=obs_dim, act_dim=act_dim, **ac_kwargs)
+    if init_checkpoint:
+        ac.load_state_dict(load_state_dict(init_checkpoint))
+        print(f'Loaded weights from {init_checkpoint}')
     ac.to(device)
+
+    if isinstance(opp, SelfPlayPool) and init_checkpoint:
+        opp.add(ac.state_dict())
     
     # Set up experience buffer
     local_steps_per_epoch = steps_per_epoch
@@ -296,54 +314,68 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
     
     # Set up optimizers for policy and value function
     # NOTE: Adam is for "Adaptive Moment Estimation," extension of SGD method
-    pi_optimizer = Adam(ac.pi_net.parameters(), lr=pi_lr)
+    # log_std is part of the policy, so it has to be optimized with it
+    pi_optimizer = Adam(list(ac.pi_net.parameters()) + [ac.log_std], lr=pi_lr)
     vf_optimizer = Adam(ac.v_net.parameters(), lr=vf_lr)
 
     # Prepare for interaction with environment
-    o, ep_ret, ep_len = env.reset(), 0, 0
+    o, info = env.reset()
+    ep_ret, ep_len = 0, 0
+    print(f"Godot mode: {info['play_mode']}, learner team: {info['learner_team']}, "
+          f"opponent: {getattr(opp, 'name', 'none')}")
+    if info['play_mode'] != 'AI_VS_AI':
+        print('Warning: Godot is not in AI_VS_AI, the opponent setting is ignored.')
 
     # Main loop: collect experience in env and update and log each epoch
     for epoch in range(epochs):
 
-        # Track lengths and returns for this epoch to average them
-
+        # Track lengths, returns and results for this epoch to average them
         epoch_returns = []
         epoch_lengths = []
+        results = {'win': 0, 'loss': 0, 'timeout': 0}
+
         for t in range(local_steps_per_epoch):
             # Get action from policy
             # NOTE: ac.step() internally handles device placement
             a, v, logp = ac.step(o)
+            a_np = a.cpu().numpy()
 
-            # Step the env (convert action to numpy for environment)
-            next_o, r, d, _ = env.step(a.cpu().numpy())
+            # Step the env (the env clips the action; the buffer keeps the raw sample for log-probs)
+            next_o, r, terminated, truncated, step_info = env.step(a_np)
             ep_ret += r
             ep_len += 1
 
             # Save experience to buffer (stored as numpy on CPU)
-            buf.store(o, a.cpu().numpy(), r, v.item(), logp.item())
+            buf.store(o, a_np, r, v.item(), logp.item())
 
             # Update obs
             o = next_o
 
-            timeout = ep_len == max_ep_len
-            terminal = d or timeout
+            timeout = truncated or ep_len == max_ep_len
+            terminal = terminated or timeout
             epoch_ended = t == local_steps_per_epoch - 1
 
             if terminal or epoch_ended:
                 if epoch_ended and not terminal:
                     print('Warning: trajectory cut off by epoch at %d steps.' % ep_len, flush=True)
-                # Bootstrap value if not done
-                if timeout or epoch_ended:
-                    _, v, _ = ac.step(o)
+                # Bootstrap value if the episode did not really end
+                if terminated:
+                    last_val = 0.0
                 else:
-                    v = 0
-                buf.finish_path(v.item())
+                    _, v_last, _ = ac.step(o)
+                    last_val = v_last.item()
+                buf.finish_path(last_val)
                 if terminal:
                     # Save episode return and length to average them at end of epoch
                     epoch_returns.append(ep_ret)
                     epoch_lengths.append(ep_len)
-                    print(f'Episode {epoch}: return={ep_ret:.2f}, length={ep_len}')
-                o, ep_ret, ep_len = env.reset(), 0, 0 
+                    scorer = step_info.get('scorer', 0) if terminated else 0
+                    outcome = 'win' if scorer == 1 else 'loss' if scorer == 2 else 'timeout'
+                    results[outcome] += 1
+                    print(f'Epoch {epoch} episode: return={ep_ret:.2f}, length={ep_len}, '
+                          f'{outcome} vs {getattr(opp, "name", "none")}')
+                o, _ = env.reset()
+                ep_ret, ep_len = 0, 0
 
         # Perform PPO update
         update_info = update(ac, buf, pi_optimizer, vf_optimizer, 
@@ -353,6 +385,9 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
         if len(epoch_returns) > 0:
             writer.add_scalar('Performance/Mean_Reward', np.mean(epoch_returns), epoch)
             writer.add_scalar('Performance/Mean_Episode_Length', np.mean(epoch_lengths), epoch)
+            n_eps = len(epoch_returns)
+            writer.add_scalar('Performance/Win_Rate', results['win'] / n_eps, epoch)
+            writer.add_scalar('Performance/Loss_Rate', results['loss'] / n_eps, epoch)
             
         writer.add_scalar('Loss/Policy_Loss', update_info['LossPi'], epoch)
         writer.add_scalar('Loss/Value_Loss', update_info['LossV'], epoch)
@@ -362,11 +397,17 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
 
         # Log info about epoch
         print(f'\nEpoch: {epoch}')
+        print(f"Episodes: {len(epoch_returns)} (W {results['win']} / L {results['loss']} / T {results['timeout']})")
         print(f"LossPi: {update_info['LossPi']:.4f}")
         print(f"LossV: {update_info['LossV']:.4f}")
         print(f"KL: {update_info['KL']:.4f}")
         print(f"Entropy: {update_info['Entropy']:.4f}")
         print(f"ClipFrac: {update_info['ClipFrac']:.4f}\n")
+
+        # Self-play: let the opponent pool catch up with the learner
+        if isinstance(opp, SelfPlayPool) and (epoch + 1) % snapshot_freq == 0:
+            opp.add(ac.state_dict())
+            print(f'Self-play pool: {len(opp.snapshots)} snapshot(s)')
         
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
@@ -375,9 +416,34 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
             print(f'Model saved at epoch {epoch}')
 
     writer.close()
+    env.close()
     return ac
 
 
 if __name__ == '__main__':
+    import argparse
     from bobble_fuck_env import bobble_fuck_env_helper
-    ppo_train(env_fn=bobble_fuck_env_helper)
+
+    parser = argparse.ArgumentParser(description='Train PPO on Bobble League (start Godot first).')
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--steps-per-epoch', type=int, default=4000)
+    parser.add_argument('--max-ep-len', type=int, default=1000)
+    parser.add_argument('--opponent', default='self',
+                        help="self | chaser | random | still | none | path/to/checkpoint.pt")
+    parser.add_argument('--snapshot-freq', type=int, default=5)
+    parser.add_argument('--init-checkpoint', default=None)
+    parser.add_argument('--device', default=None)
+    parser.add_argument('--log-dir', default='runs/ppo_experiment')
+    parser.add_argument('--save-freq', type=int, default=10)
+    args = parser.parse_args()
+
+    ppo_train(env_fn=bobble_fuck_env_helper,
+              epochs=args.epochs,
+              steps_per_epoch=args.steps_per_epoch,
+              max_ep_len=args.max_ep_len,
+              opponent=args.opponent,
+              snapshot_freq=args.snapshot_freq,
+              init_checkpoint=args.init_checkpoint,
+              device=args.device,
+              log_dir=args.log_dir,
+              save_freq=args.save_freq)
