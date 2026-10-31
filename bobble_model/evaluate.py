@@ -14,7 +14,7 @@ import re
 
 import numpy as np
 
-from bobble_fuck_env import Bobble_fuck_env
+from bobble_league_env import Bobble_league_env
 from opponents import PolicyOpponent, load_state_dict, make_opponent
 
 
@@ -40,7 +40,7 @@ def main():
     agent = PolicyOpponent(load_state_dict(ckpt), deterministic=not args.stochastic, name=ckpt)
     opponent = None if args.human else make_opponent(args.opponent, deterministic=True)
 
-    env = Bobble_fuck_env(opponent=opponent, max_ep_len=args.max_ep_len,
+    env = Bobble_league_env(opponent=opponent, max_ep_len=args.max_ep_len,
                           step_timeout=None if args.human else 120.0)
     results = {'win': 0, 'loss': 0, 'timeout': 0}
     returns = []

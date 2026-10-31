@@ -23,7 +23,7 @@ class Shared_memory_link:
     File-backed memory-map bridge between Godot and Python.
     Works on Windows, macOS and Linux (both sides map the same file).
 
-    Protocol v2 layout (120 bytes). Must match bobble_fuck/Scripts/SharedMemory.cs.
+    Protocol v2 layout (120 bytes). Must match bobble_league/Scripts/SharedMemory.cs.
     - 0-55    Observation (14 f32), learner's frame       Godot -> Python
     - 56-79   Learner action (6 f32), learner's frame     Python -> Godot
     - 80-83   Reward (f32), goal reward from learner POV  Godot -> Python

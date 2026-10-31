@@ -51,11 +51,11 @@ class RewardConfig:
     goal: float = 1.0               # scales Godot's +-1
     ball_to_goal: float = 0.5       # ball moved closer to the opponent goal
     players_to_ball: float = 0.05   # friendly players closed in on the ball (mean)
-    defense: float = 0.02           # penalty when no friendly is goal-side of the ball
+    defence: float = 0.02           # penalty when no friendly is goal-side of the ball
     time_penalty: float = 0.0       # flat cost per turn, pushes for faster goals
 
 
-class Bobble_fuck_env(gym.Env):
+class Bobble_league_env(gym.Env):
     """
     Gymnasium environment for Bobble League reinforcement learning.
     Communicates with Godot via the shared memory bridge.
@@ -163,10 +163,10 @@ class Bobble_fuck_env(gym.Env):
             after = np.linalg.norm(n_friendly - n_ball, axis=1)
             r += cfg.players_to_ball * float(np.mean(before - after)) / FIELD_HALF_Z
 
-        if cfg.defense:
+        if cfg.defence:
             # learner attacks -z, so "goal-side" (between ball and own goal) = larger z
             if not np.any(n_friendly[:, 1] > n_ball[1]):
-                r -= cfg.defense
+                r -= cfg.defence
 
         r -= cfg.time_penalty
         return float(r)
@@ -179,6 +179,6 @@ class Bobble_fuck_env(gym.Env):
 
 
 # Helper function to create environment (used by training loop)
-def bobble_fuck_env_helper(**kwargs):
+def bobble_league_env_helper(**kwargs):
     """Spinning Up style env_fn."""
-    return Bobble_fuck_env(**kwargs)
+    return Bobble_league_env(**kwargs)

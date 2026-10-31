@@ -2,7 +2,7 @@
 Opponents for AI_VS_AI training and evaluation.
 
 Every opponent gets RAW (world-unit) observations in ITS OWN frame
-(bobble_fuck_env.opponent_view) and returns 6 actions in that same frame.
+(bobble_league_env.opponent_view) and returns 6 actions in that same frame.
 Godot turns them back into world directions, so any policy trained as the
 learner can also play the opponent side.
 """
@@ -12,7 +12,7 @@ import random
 import numpy as np
 import torch
 
-from bobble_fuck_env import normalize_obs, split_obs
+from bobble_league_env import normalize_obs, split_obs
 from neural_network import Actor_critic_neural_network
 
 

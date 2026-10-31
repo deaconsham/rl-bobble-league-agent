@@ -281,7 +281,7 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
             Only used when Godot runs AI_VS_AI.
         snapshot_freq (int): With opponent='self', add the learner to the pool every N epochs.
         init_checkpoint: Optional checkpoint to start from (continue training).
-        reward_config: bobble_fuck_env.RewardConfig for reward shaping.
+        reward_config: bobble_league_env.RewardConfig for reward shaping.
         step_timeout: Seconds to wait for Godot per turn.
     """
     from opponents import make_opponent, SelfPlayPool, load_state_dict
@@ -422,7 +422,7 @@ def ppo_train(env_fn, actor_critic=Actor_critic_neural_network, ac_kwargs=dict()
 
 if __name__ == '__main__':
     import argparse
-    from bobble_fuck_env import bobble_fuck_env_helper
+    from bobble_league_env import bobble_league_env_helper
 
     parser = argparse.ArgumentParser(description='Train PPO on Bobble League (start Godot first).')
     parser.add_argument('--epochs', type=int, default=50)
@@ -437,7 +437,7 @@ if __name__ == '__main__':
     parser.add_argument('--save-freq', type=int, default=10)
     args = parser.parse_args()
 
-    ppo_train(env_fn=bobble_fuck_env_helper,
+    ppo_train(env_fn=bobble_league_env_helper,
               epochs=args.epochs,
               steps_per_epoch=args.steps_per_epoch,
               max_ep_len=args.max_ep_len,
