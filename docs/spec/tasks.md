@@ -61,10 +61,10 @@ library API names unchanged.
 
 ## Phase 4: warm start from the chaser
 
-- [ ] 4.1 `warm_start.py`: chaser vs chaser on 6 games ~20 min, record `(obs, action)`. (R26)
-- [ ] 4.2 Behaviour cloning (MSE on the mean) for the policy and critic fit on results; raise `log_std` back to its init value after cloning. (R27)
-- [ ] 4.3 `training_loop.py --init warm_start.pt` starts from the warm-start checkpoint. (R28)
-- [ ] 4.4 **Test (T1, T5):** T1 cloning loss drops on a fixed recorded set; T5 warm-started net beats the random net vs chaser before PPO, and PPO from it is never worse than from scratch at the same turn count. (R29, R48, R49, R53)
+- [x] 4.1 `warm_start.py`: chaser vs chaser on 6 games ~20 min, record `(obs, action)`. (R26)
+- [x] 4.2 Behaviour cloning (MSE on the mean) for the policy and critic fit on results; raise `log_std` back to its init value after cloning. (R27)
+- [x] 4.3 `training_loop.py --init warm_start.pt` starts from the warm-start checkpoint. (R28)
+- [x] 4.4 **Test (T1, T5):** T1 cloning loss drops on a fixed recorded set; T5 warm-started net beats the random net vs chaser before PPO, and PPO from it is never worse than from scratch at the same turn count. (R29, R48, R49, R53)
 
 ---
 
