@@ -27,42 +27,78 @@ public partial class GameManager : Node
     [Export] public PlayMode CurrentPlayMode;
     bool humanWaitingForAI;
 
-    // Speeds up AI_VS_AI. Physics ticks are raised by the same factor, so each
-    // physics step keeps the same dt and the simulation behaves the same, just faster.
-    // Override from the command line: godot --path bobble_fuck -- --mode=ai_vs_ai --timescale=8
+    // speeds up AI_VS_AI. physics ticks go up by the same amount so each step is still 1/60 s
+    // command line: godot --path bobble_league -- --mode=ai_vs_ai --timescale=32
     [ExportGroup("Training speed")]
     [Export(PropertyHint.Range, "1,32,1")] public float AIvsAITimeScale = 8f;
 
+    // a turn that never settles gets ended after this many game seconds
+    [Export] public float MaxTurnSeconds = 20f;
+
+    // arena is scaled 0.5: side walls at x = +-10, back of the nets at z = +-18.5
+    [Export] public float FieldHalfX = 10f;
+    [Export] public float FieldHalfZ = 18.5f;
+
+    [Export] DataManager dataManager;
+    [Export] TextureRect jumps_care;
+
+    int turn = 1;
+    int currentTeam = 1;
+
+    int scoreA;
+    int scoreB;
+
+    bool isSimulating;
+    double simTime;
+    float stepReward;
+    bool currentDone;
+    int lastScorer; // 0 nobody, 1 learner, 2 opponent
+
+    // the team the AI plays, python always sees the game from this team's side
+    int LearnerTeam => CurrentPlayMode == PlayMode.HUMAN_VS_AI ? 2 : 1;
+    int OpponentTeam => LearnerTeam == 1 ? 2 : 1;
+
+    public override void _EnterTree() {
+        Spawn();
+    }
+
     public override void _Ready() {
-        ApplyCommandLine();
+        ReadCommandLine();
         if (CurrentPlayMode == PlayMode.AI_VS_AI && AIvsAITimeScale > 1f) {
-            ApplyTimeScale(AIvsAITimeScale);
+            SetTimeScale(AIvsAITimeScale);
         }
     }
 
-    // args after "--":  --mode=ai_vs_ai|human_vs_ai|human_vs_human  --timescale=N
-    void ApplyCommandLine() {
+    // args after "--": --mode=ai_vs_ai|human_vs_ai|human_vs_human --timescale=N
+    void ReadCommandLine() {
         foreach (string arg in OS.GetCmdlineUserArgs()) {
             if (arg.StartsWith("--mode=")) {
                 string mode = arg.Substring("--mode=".Length).ToUpperInvariant();
-                if (Enum.TryParse(mode, out PlayMode parsed)) CurrentPlayMode = parsed;
-                else GD.PrintErr($"Unknown --mode '{mode}'");
+                if (Enum.TryParse(mode, out PlayMode parsed)) {
+                    CurrentPlayMode = parsed;
+                }
+                else {
+                    GD.PrintErr($"Unknown --mode '{mode}'");
+                }
             }
             else if (arg.StartsWith("--timescale=")) {
-                if (float.TryParse(arg.Substring("--timescale=".Length),
-                        System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out float s) && s >= 1f) {
-                    AIvsAITimeScale = s;
+                string value = arg.Substring("--timescale=".Length);
+                bool ok = float.TryParse(value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out float scale);
+                if (ok && scale >= 1f) {
+                    AIvsAITimeScale = scale;
                 }
-                else GD.PrintErr($"Bad {arg}, need a number >= 1");
+                else {
+                    GD.PrintErr($"Bad {arg}, needs a number >= 1");
+                }
             }
         }
     }
 
-    void ApplyTimeScale(float scale) {
+    void SetTimeScale(float scale) {
         int baseTicks = Engine.PhysicsTicksPerSecond;
         Engine.TimeScale = scale;
-        // Godot steps physics with dt = (1 / ticks) * time_scale, so scale ticks too
+        // godot uses dt = time_scale / ticks, so raise ticks too or the steps get bigger
         Engine.PhysicsTicksPerSecond = Mathf.RoundToInt(baseTicks * scale);
         Engine.MaxPhysicsStepsPerFrame = Math.Max(8, Mathf.CeilToInt(scale) * 2);
         if (DisplayServer.GetName() != "headless") {
@@ -71,84 +107,65 @@ public partial class GameManager : Node
         GD.Print($"AI_VS_AI time scale x{scale} ({Engine.PhysicsTicksPerSecond} physics ticks/s)");
     }
 
-    int turn = 1;
-    int currentTeam = 1;
-
-    int scoreA;
-    int scoreB;
-
-    [Export] DataManager dataManager;
-    bool isSimulating;
-    float stepReward;
-    bool currentDone;
-    int lastScorer; // 0 none, 1 learner, 2 opponent
-
-    // the team the RL policy plays. Python always sees this team's frame.
-    int LearnerTeam => CurrentPlayMode == PlayMode.HUMAN_VS_AI ? 2 : 1;
-    int OpponentTeam => LearnerTeam == 1 ? 2 : 1;
-
     public override void _Input(InputEvent @event) {
-        if (@event is InputEventMouseButton mouseButton) {
-            // H vs AI
-            if (CurrentPlayMode == PlayMode.HUMAN_VS_AI) {
-                if (humanWaitingForAI) return;
-                bool stationaryBall = ball == null || ball.LinearVelocity.Length() < 0.01;
-                if (mouseButton.ButtonIndex == MouseButton.Left && mouseButton.Pressed) {
-                    if (stationaryBall && StationaryPlayers()) {
-                        launchPlayer = playerClicked(1); // Humans can only click Team A
-                        if (launchPlayer != null) {
-                            launchPlayer.DrawArrow();
-                        }
-                    }
-                }
+        if (@event is not InputEventMouseButton mouseButton) return;
 
-                if (mouseButton.ButtonIndex == MouseButton.Left && mouseButton.IsReleased()) {
-                    launchPlayer = null;
-                }
-
-                // Right click confirms human turn and passes to AI
-                if (mouseButton.ButtonIndex == MouseButton.Right && mouseButton.IsReleased()) {
-                    if (stationaryBall && StationaryPlayers()) {
-                        // Turn over to AI
-                        humanWaitingForAI = true;
+        // human vs ai
+        if (CurrentPlayMode == PlayMode.HUMAN_VS_AI) {
+            if (humanWaitingForAI) return;
+            bool stationaryBall = StationaryBall();
+            if (mouseButton.ButtonIndex == MouseButton.Left && mouseButton.Pressed) {
+                if (stationaryBall && StationaryPlayers()) {
+                    launchPlayer = PlayerClicked(1); // humans can only pick team A
+                    if (launchPlayer != null) {
+                        launchPlayer.DrawArrow();
                     }
                 }
             }
-            
-            // H v H
-            if (CurrentPlayMode == PlayMode.HUMAN_VS_HUMAN) {
-                bool stationaryBall = StationaryBall();
-                if (mouseButton.ButtonIndex == MouseButton.Left && mouseButton.Pressed) {
+
+            if (mouseButton.ButtonIndex == MouseButton.Left && mouseButton.IsReleased()) {
+                launchPlayer = null;
+            }
+
+            // right click ends the human's turn and hands it to the AI
+            if (mouseButton.ButtonIndex == MouseButton.Right && mouseButton.IsReleased()) {
+                if (stationaryBall && StationaryPlayers()) {
+                    humanWaitingForAI = true;
+                }
+            }
+        }
+
+        // human vs human
+        if (CurrentPlayMode == PlayMode.HUMAN_VS_HUMAN) {
+            bool stationaryBall = StationaryBall();
+            if (mouseButton.ButtonIndex == MouseButton.Left && mouseButton.Pressed) {
+                if (stationaryBall && StationaryPlayers()) {
+                    launchPlayer = PlayerClicked(currentTeam);
+                    if (launchPlayer != null) {
+                        launchPlayer.DrawArrow();
+                    }
+                }
+            }
+        
+            if (mouseButton.ButtonIndex == MouseButton.Left && mouseButton.IsReleased()) {
+                launchPlayer = null;
+            }
+        
+            if (mouseButton.ButtonIndex == MouseButton.Right && mouseButton.IsReleased()) {
+                GD.Print("team: " + currentTeam);
+                if (currentTeam == 1) {
+                    if (stationaryBall) {
+                        // hide team A's arrows so team B can't see them
+                        foreach (Player player in TeamPlayers(1)) {
+                            player.ClearArrow();
+                        }
+                        currentTeam = 2;
+                    }
+                }
+                else {
                     if (stationaryBall && StationaryPlayers()) {
-                        launchPlayer = playerClicked(currentTeam);
-                        if (launchPlayer != null) {
-                            launchPlayer.DrawArrow();
-                        }
-                    }
-                }
-            
-                if (mouseButton.ButtonIndex == MouseButton.Left && mouseButton.IsReleased()) {
-                    launchPlayer = null;
-                }
-            
-                if (mouseButton.ButtonIndex == MouseButton.Right && mouseButton.IsReleased()) {
-                    GD.Print("team: " + currentTeam);
-                    if (currentTeam == 1) {
-                        if (stationaryBall) {
-                            // more poopy
-                            foreach (Player player in players.GetChildren()) {
-                                if (player.team == 1) {
-                                    player.ClearArrow();
-                                }
-                            }
-                            currentTeam = 2;
-                        }
-                    }
-                    else {
-                        if (stationaryBall && StationaryPlayers()) {
-                            Turn();
-                            currentTeam = 1;
-                        }
+                        Turn();
+                        currentTeam = 1;
                     }
                 }
             }
@@ -164,41 +181,28 @@ public partial class GameManager : Node
         }
     }
 
-    // kind of shit but i didnt want to deal with godot raycast and colliders
-    Player playerClicked(int desiredTeam) {
-        // Compile the list of players
-        // less poopy?
-        List<Player> desiredPlayerList = new List<Player>();
-        foreach (Player player in players.GetChildren()) {
-            if (player.team == desiredTeam) {
-                desiredPlayerList.Add(player);
-            }
-        }
-
+    // closest player on that team to the mouse. simpler than raycasting the colliders
+    Player PlayerClicked(int desiredTeam) {
         Vector3 mouse = MousePosition();
         
-        // Closest player
         float closestDistance = float.MaxValue;
         Player closestPlayer = null;
-        for (int i = 0; i < desiredPlayerList.Count; i++) {
-            // faster calculation and doesnt matter lol idk ok cool
-            // is a root calculation taht expensive ??
-            float distance = desiredPlayerList[i].Position.DistanceSquaredTo(mouse);
+        foreach (Player player in TeamPlayers(desiredTeam)) {
+            // squared distance is fine for comparing
+            float distance = player.Position.DistanceSquaredTo(mouse);
             if (distance < closestDistance) {
                 closestDistance = distance;
-                closestPlayer = desiredPlayerList[i];
+                closestPlayer = player;
             }
         }
 
         if (closestDistance < selectDistance) {
             return closestPlayer;
         }
-        else {
-            return null;
-        }
+        return null;
     }
 
-    // Mouse position on xy plane
+    // mouse position on the xz plane
     Vector3 MousePosition() {
         Vector2 mousePosition = GetWindow().GetMousePosition();
         Plane plane = Plane.PlaneXZ;
@@ -206,9 +210,7 @@ public partial class GameManager : Node
         if (intersect != null) {
             return intersect.Value;
         }
-        else {
-            return new Vector3(0, 0, 0);
-        }
+        return new Vector3(0, 0, 0);
     }
 
     void Turn() {
@@ -221,25 +223,24 @@ public partial class GameManager : Node
         turn++;
     }
 
-    [Export] TextureRect jumps_care;
-    
-    public void SCOREEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE(int team) {
+    // called by TeamGoal, team = the team that gets the point
+    public void Score(int team) {
         bool rlMode = CurrentPlayMode != PlayMode.HUMAN_VS_HUMAN;
-        // a goal already ended this turn; ignore a second trigger
+        // a goal already ended this turn, ignore the second trigger
         if (rlMode && currentDone) return;
 
         if (team == 1) scoreA++;
         else scoreB++;
 
         if (rlMode) {
-            // reward is from the LEARNER's side, whichever team that is
+            // reward is from the AI's side, whichever team that is
             bool learnerScored = team == LearnerTeam;
             stepReward += learnerScored ? 1.0f : -1.0f;
             lastScorer = learnerScored ? 1 : 2;
-            currentDone = true; // tells Python the episode ended
+            currentDone = true; // ends the episode on the python side
         }
 
-        GD.Print("team: " + team + " scored"); // soooo orangy
+        GD.Print("team: " + team + " scored");
         Reset();
         jumps_care.SetVisible(true);
         if (jumps_care.Texture is AnimatedTexture animatedTexture) {
@@ -247,64 +248,60 @@ public partial class GameManager : Node
         }
     }
 
-    public override void _EnterTree() {
-        Spawn();
-    }
-
     void Reset() {
-        foreach (var node in players.GetChildren()) {
-            var player = (Player)node; // yeah bro because casting would totally save us from an error bro again bro how many times do we have to tell you old man *farts*
-            player.Free();
+        foreach (Node node in players.GetChildren()) {
+            node.Free();
         }
         ball.AngularVelocity = Vector3.Zero;
         ball.LinearVelocity = Vector3.Zero;
         ball.Position = new Vector3(0, 0.5f, 0);
         Spawn();
     }
-    
-    bool StationaryPlayers() {
-        bool value = true;
-        foreach (Node node in players.GetChildren()) {
-            if (node.IsQueuedForDeletion()) continue;
-            if (node is Player p && p.LinearVelocity.Length() >= 0.01f) {
-                value = false;
-                break;
-            }
-        }
-        return value;
-    }
-
-    // horizontal speed only, same rule as Ball.cs (it pins y, so y velocity is noise)
-    bool StationaryBall() {
-        return ball == null || new Vector2(ball.LinearVelocity.X, ball.LinearVelocity.Z).Length() < 0.01f;
-    }
 
     void Spawn() {
-        foreach (var node in spawns.GetChildren()) {
-            var spawn = (PlayerSpawn)node;
+        foreach (PlayerSpawn spawn in spawns.GetChildren()) {
             Player player = PlayerPrefab.Instantiate<Player>();
             player.Position = new Vector3(spawn.Position.X, 1.001f, spawn.Position.Z);
             
             MeshInstance3D mesh = player.GetChild(0) as MeshInstance3D;
-            if (spawn.Team == 1) { mesh.SetSurfaceOverrideMaterial(0, TeamA);}
-            else if (spawn.Team == 2) { mesh.SetSurfaceOverrideMaterial(0, TeamB);}
+            if (spawn.Team == 1) mesh.SetSurfaceOverrideMaterial(0, TeamA);
+            else if (spawn.Team == 2) mesh.SetSurfaceOverrideMaterial(0, TeamB);
             
             player.team = spawn.Team;
             
             players.AddChild(player);
         }
-        
-        
-
-        GD.Print(players.GetChildCount());
+    }
+    
+    bool StationaryPlayers() {
+        foreach (Node node in players.GetChildren()) {
+            if (node.IsQueuedForDeletion()) continue;
+            if (node is Player p && p.LinearVelocity.Length() >= 0.01f) {
+                return false;
+            }
+        }
+        return true;
     }
 
-    // can probably be a normal Process? idk man
+    // side to side speed only, same as Ball.cs (it pins y so y velocity is just noise)
+    bool StationaryBall() {
+        return ball == null || new Vector2(ball.LinearVelocity.X, ball.LinearVelocity.Z).Length() < 0.01f;
+    }
+
+    // same order DataManager uses, so action i goes to the player in obs slot i
+    List<Player> TeamPlayers(int team) {
+        List<Player> list = new List<Player>();
+        foreach (Node node in players.GetChildren()) {
+            if (node.IsQueuedForDeletion()) continue;
+            if (node is Player p && p.team == team) list.Add(p);
+        }
+        return list;
+    }
+
     public override void _PhysicsProcess(double delta) {
         if (isSimulating) {
             simTime += delta;
-            // a ball or player that leaves the pitch (e.g. kicked over a wall)
-            // can never come to rest, so restart from kickoff. No reward, not done.
+            // something that leaves the pitch can never settle, so go back to kickoff (no reward)
             if (!currentDone && AnythingOutOfBounds()) {
                 GD.Print($"Turn {turn}: something left the pitch, back to kickoff");
                 Reset();
@@ -312,8 +309,7 @@ public partial class GameManager : Node
             bool timedOut = simTime > MaxTurnSeconds;
             if (timedOut) LogMovingBodies();
             if (timedOut || (StationaryBall() && StationaryPlayers())) {
-                // Done simulating this turn. Reward here is only the goal
-                // reward (+1/-1/0); Python adds reward shaping itself.
+                // only the goal reward (+1/-1/0) comes from here, python adds the shaping
                 dataManager.Export(currentDone, stepReward, false, LearnerTeam, lastScorer, (int)CurrentPlayMode);
                 stepReward = 0;
                 currentDone = false;
@@ -323,10 +319,9 @@ public partial class GameManager : Node
             return;
         }
 
-        if (CurrentPlayMode == PlayMode.HUMAN_VS_HUMAN) return; // no Python here
+        if (CurrentPlayMode == PlayMode.HUMAN_VS_HUMAN) return; // no python here
 
-        // Resets are handled before the human gate, so Python's first
-        // env.reset() does not wait for (or eat) a human right-click.
+        // handle resets before waiting on the human so env.reset() doesn't use up a right click
         if (dataManager.IsResetRequested()) {
             Reset();
             stepReward = 0;
@@ -337,7 +332,7 @@ public partial class GameManager : Node
             return;
         }
 
-        // For human vs ai mode, we don't want to consume Python's step request until the human has submitted their turn.
+        // in human vs ai, leave python's step request alone until the human ends their turn
         if (CurrentPlayMode == PlayMode.HUMAN_VS_AI && !humanWaitingForAI) {
             return;
         }
@@ -346,14 +341,13 @@ public partial class GameManager : Node
             return;
         }
 
+        ApplyTeamAction(action, LearnerTeam);
         if (CurrentPlayMode == PlayMode.AI_VS_AI) {
-            ApplyTeamAction(action, LearnerTeam);
-            // no opponent action from Python -> opponent stands still
+            // null when python sends nothing, then the opponent stands still
             ApplyTeamAction(opponentAction, OpponentTeam);
         }
-        else { // HUMAN_VS_AI
-            // Human's inputs (Team A) are already set in player.input from _Process
-            ApplyTeamAction(action, LearnerTeam);
+        else {
+            // the human's moves are already in player.input from _Process
             humanWaitingForAI = false;
         }
 
@@ -363,15 +357,22 @@ public partial class GameManager : Node
         isSimulating = true;
     }
 
-    // a turn that never comes to rest is ended after this many game seconds
-    [Export] public float MaxTurnSeconds = 20f;
-    double simTime;
+    // action = [p1_x, p1_z, p2_x, p2_z, p3_x, p3_z] from that team's side (see DataManager.FrameZ)
+    void ApplyTeamAction(float[] action, int team) {
+        List<Player> teamPlayers = TeamPlayers(team);
+        float zSign = DataManager.FrameZ(team);
+        for (int i = 0; i < teamPlayers.Count; i++) {
+            if (action == null || 2 * i + 1 >= action.Length) {
+                teamPlayers[i].input = Vector3.Zero;
+                continue;
+            }
+            float x = action[2 * i];
+            float z = action[2 * i + 1] * zSign;
+            teamPlayers[i].input = new Vector3(x, 0, z);
+        }
+    }
 
-    // pitch size in world units (Arena mesh is scaled 0.5): walls at x = +-10,
-    // back of the nets at z = +-18.5. 1 unit of slack before "out".
-    [Export] public float FieldHalfX = 10f;
-    [Export] public float FieldHalfZ = 18.5f;
-
+    // 1 unit of slack past the walls before it counts as out
     bool OutOfBounds(Vector3 p) {
         return Mathf.Abs(p.X) > FieldHalfX + 1f || Mathf.Abs(p.Z) > FieldHalfZ + 1f || p.Y < -2f;
     }
@@ -393,37 +394,13 @@ public partial class GameManager : Node
 
     void LogMovingBodies() {
         GD.PrintErr($"Turn {turn} did not settle in {MaxTurnSeconds}s, ending it anyway. Still moving:");
-        if (ball != null && ball.LinearVelocity.Length() >= 0.01f)
+        if (ball != null && ball.LinearVelocity.Length() >= 0.01f) {
             GD.PrintErr($"  ball pos {ball.GlobalPosition} vel {ball.LinearVelocity}");
+        }
         foreach (Node node in players.GetChildren()) {
-            if (node is Player p && p.LinearVelocity.Length() >= 0.01f)
+            if (node is Player p && p.LinearVelocity.Length() >= 0.01f) {
                 GD.PrintErr($"  team {p.team} player pos {p.GlobalPosition} vel {p.LinearVelocity}");
-        }
-    }
-
-    // same order DataManager uses for observations, so action i <-> obs slot i
-    List<Player> TeamPlayers(int team) {
-        List<Player> list = new List<Player>();
-        foreach (Node node in players.GetChildren()) {
-            if (node.IsQueuedForDeletion()) continue;
-            if (node is Player p && p.team == team) list.Add(p);
-        }
-        return list;
-    }
-
-    // action = [p1_x, p1_z, p2_x, p2_z, p3_x, p3_z] in that team's own frame
-    // (see DataManager.FrameZ). null = no input this turn.
-    void ApplyTeamAction(float[] action, int team) {
-        List<Player> teamPlayers = TeamPlayers(team);
-        float zSign = DataManager.FrameZ(team);
-        for (int i = 0; i < teamPlayers.Count; i++) {
-            if (action == null || 2 * i + 1 >= action.Length) {
-                teamPlayers[i].input = Vector3.Zero;
-                continue;
             }
-            float x = action[2 * i];
-            float z = action[2 * i + 1] * zSign;
-            teamPlayers[i].input = new Vector3(x, 0, z);
         }
     }
 }
