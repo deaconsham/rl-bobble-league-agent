@@ -32,7 +32,7 @@ OPP_ACT_OFFSET = 92
 VERSION_OFFSET = 116
 TOTAL_SIZE = 120
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 OBS_DIM = 14
 ACT_DIM = 6
 
@@ -124,7 +124,15 @@ class Mock_godot:
 
     def _read_action(self):
         raw = self.buf[ACT_OFFSET:ACT_OFFSET + ACT_DIM * 4]
-        return np.frombuffer(raw, dtype=np.float32).copy().reshape(3, 2)
+        action = np.frombuffer(raw, dtype=np.float32).copy().reshape(3, 2)
+        # protocol v3: [angle, power] per player -> (x, z) * power, like Godot decodes.
+        # learner frame so FrameZ is +1; angle a*pi from -z, power 0.2+0.8*(p+1)/2.
+        a = np.clip(action[:, 0], -1.0, 1.0)
+        p = np.clip(action[:, 1], -1.0, 1.0)
+        theta = a * np.pi
+        dirs = np.stack([np.sin(theta), -np.cos(theta)], axis=-1)
+        power = 0.2 + 0.8 * (p + 1.0) / 2.0
+        return (dirs * power[:, None]).astype(np.float32)
 
     def _advance(self, action):
         """move friendly players a bit along their action, drift the ball."""

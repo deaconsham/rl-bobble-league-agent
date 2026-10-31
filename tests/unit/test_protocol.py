@@ -101,6 +101,22 @@ def test_old_version_is_refused(tmp_path):
         Shared_memory_link(path=path, create=False)
 
 
+def test_version_is_v3():
+    # Phase 2 bumped the protocol for the angle+power action
+    assert Shared_memory_link.PROTOCOL_VERSION == 3
+
+
+def test_v2_buffer_is_refused(tmp_path):
+    # a pre-Phase-2 Godot (v2, the old x/z action) must be refused by new python
+    path = str(tmp_path / "shm.dat")
+    maker = Shared_memory_link(path=path, create=True)
+    maker.buf[maker.VERSION_OFFSET] = 2
+    maker.close()
+
+    with pytest.raises(RuntimeError, match="protocol v2"):
+        Shared_memory_link(path=path, create=False)
+
+
 def test_missing_file_is_refused(tmp_path):
     path = str(tmp_path / "does_not_exist.dat")
     with pytest.raises(FileNotFoundError):

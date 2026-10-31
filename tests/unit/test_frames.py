@@ -5,7 +5,13 @@ looks identical from both sides.
 """
 import numpy as np
 
-from bobble_league_env import opponent_view, split_obs, normalize_obs
+from bobble_league_env import (
+    opponent_view,
+    split_obs,
+    normalize_obs,
+    decode_action,
+    vector_to_action,
+)
 
 
 def make_obs(ball, friendly, enemy):
@@ -66,3 +72,28 @@ def test_normalize_obs_clips_to_unit_range():
                    [[-100, -100]] * 3)
     norm = normalize_obs(obs)
     assert norm.max() <= 1.0 and norm.min() >= -1.0
+
+
+# ---- the new angle+power action still round-trips through the mirror ----
+
+def test_action_vector_round_trip():
+    # a (x, z) aim packed to angle+power then decoded recovers the direction
+    # (and a power inside the band). this is the chaser/human path.
+    vecs = np.array([[0.2, -0.9], [-0.6, 0.4], [0.0, -1.0]], dtype=np.float32)
+    back = decode_action(vector_to_action(vecs))
+    for v, b in zip(vecs, back):
+        uv = v / np.linalg.norm(v)
+        ub = b / np.linalg.norm(b)
+        assert np.allclose(uv, ub, atol=1e-5)
+
+
+def test_action_mirror_flips_z_like_the_board():
+    # decode in one frame, flip z (the mirror the two teams differ by), and it
+    # equals decoding the action you'd pack from the z-flipped aim. this is the
+    # action-side of opponent_view's z flip.
+    vecs = np.array([[0.3, -0.8], [-0.5, 0.5], [0.1, -0.2]], dtype=np.float32)
+    decoded = decode_action(vector_to_action(vecs))
+    flipped_in = vecs * np.array([1.0, -1.0], dtype=np.float32)
+    decoded_flipped = decode_action(vector_to_action(flipped_in))
+    assert np.allclose(decoded * np.array([1.0, -1.0]), decoded_flipped, atol=1e-5)
+

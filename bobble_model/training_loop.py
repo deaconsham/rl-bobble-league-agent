@@ -5,6 +5,11 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 from neural_network import Actor_critic_neural_network
+from shared_memory_link import Shared_memory_link
+
+# the action meaning is tied to the wire protocol, so tag checkpoints with the
+# same version. an old save (pre angle+power) has no tag and is refused on load.
+ACTION_FORMAT_VERSION = Shared_memory_link.PROTOCOL_VERSION
 
 def get_device(device=None):
     """
@@ -296,6 +301,10 @@ def save_checkpoint(path, ac, pi_optimizer, vf_optimizer, epoch, lr_step,
         'vf_optimizer': vf_optimizer.state_dict(),
         'epoch': epoch,
         'lr_step': lr_step,
+        # action shape changed in Phase 2 (angle+power, protocol v3). the tensor
+        # shapes did NOT change, so an old save would load silently and play
+        # garbage; this tag lets the loaders refuse it with a clear message.
+        'action_format': ACTION_FORMAT_VERSION,
     }
     if isinstance(opponent, SelfPlayPool):
         ckpt['pool'] = opponent.state()
@@ -308,11 +317,22 @@ def save_checkpoint(path, ac, pi_optimizer, vf_optimizer, epoch, lr_step,
 
 
 def load_checkpoint(path, map_location='cpu'):
-    """Docstring for load_checkpoint: read a full checkpoint dict (or a bare state_dict)."""
+    """Docstring for load_checkpoint: read a full checkpoint dict and refuse an
+    old pre-Phase-2 action format (the tensor shapes match, so without the tag an
+    old save would load silently and play garbage)."""
     ckpt = torch.load(path, map_location=map_location, weights_only=False)
     if not isinstance(ckpt, dict) or 'model' not in ckpt:
-        # an old weights-only save: wrap it so callers see the same shape
-        return {'model': ckpt}
+        raise ValueError(
+            f"'{path}' is a pre-Phase-2 checkpoint (no action_format tag). The "
+            f"action shape changed to angle+power (protocol v{ACTION_FORMAT_VERSION}); "
+            f"old checkpoints no longer apply, train a fresh run."
+        )
+    found = ckpt.get('action_format')
+    if found != ACTION_FORMAT_VERSION:
+        raise ValueError(
+            f"'{path}' is action_format {found!r}, expected {ACTION_FORMAT_VERSION} "
+            f"(angle+power). Old checkpoints no longer apply, train a fresh run."
+        )
     return ckpt
 
 def join_and_normalize(buffers, device='cpu'):

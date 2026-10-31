@@ -23,9 +23,9 @@ class Shared_memory_link:
     File-backed memory-map bridge between Godot and Python.
     Works on Windows, macOS and Linux (both sides map the same file).
 
-    Protocol v2 layout (120 bytes). Must match bobble_league/Scripts/SharedMemory.cs.
+    Protocol v3 layout (120 bytes). Must match bobble_league/Scripts/SharedMemory.cs.
     - 0-55    Observation (14 f32), learner's frame       Godot -> Python
-    - 56-79   Learner action (6 f32), learner's frame     Python -> Godot
+    - 56-79   Learner action (6 f32) [a1,p1,...] angle+power, learner's frame  Python -> Godot
     - 80-83   Reward (f32), goal reward from learner POV  Godot -> Python
     - 84      Done (u8, 1 = goal scored)                  Godot -> Python
     - 85      Step request (u8)                           Python sets, Godot clears
@@ -40,7 +40,7 @@ class Shared_memory_link:
     Start Godot FIRST: it zeroes the buffer and writes the version when it boots.
     """
 
-    PROTOCOL_VERSION = 2
+    PROTOCOL_VERSION = 3
 
     OBS_OFFSET = 0
     OBS_SIZE = 14 * 4
@@ -105,7 +105,7 @@ class Shared_memory_link:
     def write_action(self, action):
         """
         Args:
-            action: 6 float32 values [p1_x, p1_z, p2_x, p2_z, p3_x, p3_z], learner's frame
+            action: 6 float32 values [a1, p1, a2, p2, a3, p3] (angle+power), learner's frame
         """
         data = np.asarray(action, dtype=np.float32).reshape(self.ACT_DIM).tobytes()
         self.buf[self.ACT_OFFSET:self.ACT_OFFSET + self.ACT_SIZE] = data

@@ -19,14 +19,21 @@ public partial class Player : RigidBody3D
 
 
     public Vector3 input;
+    // power scale (0.2-1) set by the AI action or the human drag; Launch uses it
+    public float launchPower = 1f;
 
     [Export] Node3D ArrowBase;
     [Export] Node3D ArrowTip;
     bool hidden = true;
 
-    public void Launch() {
+    // input is the aim direction; launchPower (0.2-1) sets how hard, so soft and
+    // hard shots differ. a caller can override the scale, else the stored one is
+    // used (set by the AI action or the human drag). direction only matters for
+    // aim; its length is ignored because power is carried separately.
+    public void Launch(float powerScale = -1f) {
+        float power = powerScale >= 0f ? powerScale : launchPower;
         Vector3 inputNorm = input.Normalized();
-        LinearVelocity = new Vector3(inputNorm.X, 0, inputNorm.Z) * launchForce;
+        LinearVelocity = new Vector3(inputNorm.X, 0, inputNorm.Z) * launchForce * power;
         
         if (input.Length() > 0) {
             float angle = Mathf.Atan2(input.X, input.Z);
@@ -37,6 +44,7 @@ public partial class Player : RigidBody3D
         ClearArrow();
         
         input = new Vector3(0, 0, 0);
+        launchPower = 1f;
     }
 
     public void DrawArrow() {

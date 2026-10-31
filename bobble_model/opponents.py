@@ -6,14 +6,14 @@ Every opponent gets RAW (world-unit) observations in ITS OWN frame
 Godot turns them back into world directions, so any policy trained as the
 learner can also play the opponent side.
 """
-import copy
 import random
 
 import numpy as np
 import torch
 
-from bobble_league_env import normalize_obs, split_obs
+from bobble_league_env import normalize_obs, split_obs, vector_to_action
 from neural_network import Actor_critic_neural_network
+from shared_memory_link import Shared_memory_link
 
 
 class StillOpponent:
@@ -72,8 +72,12 @@ class ChaserOpponent:
             movers = np.argsort(dist.ravel())[:self.kickoff_movers]
             stay = np.ones(len(friendly), dtype=bool)
             stay[movers] = False
-            direction[stay] = 0.0
-        return np.clip(direction, -1.0, 1.0).astype(np.float32).ravel()
+            # v3 has no zero-power "don't move", so aim non-movers back at own
+            # goal (+z); vector_to_action floors them at 0.2 power, a harmless
+            # nudge away from the ball instead of a weak shot at the enemy goal.
+            direction[stay] = np.array([0.0, 1.0], dtype=np.float32)
+        # protocol v3: aim vectors -> angle + power (vector_to_action).
+        return vector_to_action(direction)
 
 
 class PolicyOpponent:
@@ -167,11 +171,28 @@ class SelfPlayPool:
 
 
 def load_state_dict(path, map_location="cpu"):
-    """Loads a checkpoint saved by training_loop (plain state_dict or {'model': ...})."""
-    ckpt = torch.load(path, map_location=map_location, weights_only=True)
-    if isinstance(ckpt, dict) and "model" in ckpt:
-        return ckpt["model"]
-    return copy.deepcopy(ckpt)
+    """Loads a checkpoint saved by training_loop and refuses a pre-Phase-2 one.
+
+    The action shape changed to angle+power (protocol v3) without changing any
+    tensor shapes, so an old checkpoint would load silently and play garbage.
+    Only a full dict carrying 'action_format' == PROTOCOL_VERSION is accepted."""
+    # weights_only=False matches training_loop.load_checkpoint: a full save
+    # carries numpy RNG/pool objects, and it is the user's own training output.
+    ckpt = torch.load(path, map_location=map_location, weights_only=False)
+    if not isinstance(ckpt, dict) or "model" not in ckpt:
+        raise ValueError(
+            f"'{path}' is a pre-Phase-2 checkpoint (no action_format tag). The "
+            f"action shape is now angle+power (protocol v{Shared_memory_link.PROTOCOL_VERSION}); "
+            f"old checkpoints no longer apply, train a fresh run."
+        )
+    found = ckpt.get("action_format")
+    if found != Shared_memory_link.PROTOCOL_VERSION:
+        raise ValueError(
+            f"'{path}' is action_format {found!r}, expected "
+            f"{Shared_memory_link.PROTOCOL_VERSION} (angle+power). Old checkpoints "
+            f"no longer apply, train a fresh run."
+        )
+    return ckpt["model"]
 
 
 def make_opponent(spec, deterministic=False):

@@ -8,9 +8,9 @@ using System.Threading;
 // uses a FILE-BACKED memory map so it works on Windows, macOS and Linux
 // (named maps without a file are Windows-only in .NET).
 //
-// Protocol v2 layout (120 bytes). Must match bobble_model/shared_memory_link.py.
+// Protocol v3 layout (120 bytes). Must match bobble_model/shared_memory_link.py.
 //   0-55   obs, 14 x f32           godot -> python  (learner's frame, see DataManager)
-//   56-79  learner action, 6 x f32 python -> godot  (learner's frame)
+//   56-79  learner action, 6 x f32 python -> godot  [a1,p1,a2,p2,a3,p3] angle+power, learner's frame
 //   80-83  reward, f32             godot -> python  (learner's point of view)
 //   84     done, u8                godot -> python  (1 = goal scored)
 //   85     step request, u8        python sets 1, godot clears
@@ -20,11 +20,11 @@ using System.Threading;
 //   89     play mode, u8           godot -> python  (GameManager.PlayMode)
 //   90     opponent action valid   python -> godot  (1 = use bytes 92-115)
 //   91     pad
-//   92-115 opponent action, 6 x f32 python -> godot (opponent's own frame)
+//   92-115 opponent action, 6 x f32 python -> godot (opponent's own frame, angle+power)
 //   116    protocol version, u8    godot -> python
 //   117-119 pad
 public class SharedMemory : IDisposable {
-    public const byte PROTOCOL_VERSION = 2;
+    public const byte PROTOCOL_VERSION = 3;
 
     private const int OBS_OFFSET = 0;
     private const int ACT_OFFSET = 56;

@@ -7,10 +7,12 @@ run continues exactly.
 import random
 
 import numpy as np
+import pytest
 import torch
 from torch.optim import Adam
 
 from neural_network import Actor_critic_neural_network
+from shared_memory_link import Shared_memory_link
 from training_loop import save_checkpoint, load_checkpoint, rng_state, set_rng_state
 from opponents import SelfPlayPool
 
@@ -80,15 +82,46 @@ def test_rng_state_round_trip():
     assert a == b
 
 
-def test_old_weights_only_checkpoint_still_loads(tmp_path):
-    """a phase-0 bare state_dict save is wrapped as {'model': ...} so resume code sees one shape."""
+def test_old_checkpoint_is_refused_with_clear_message(tmp_path):
+    """Phase 2: the action meaning changed (angle+power) without changing tensor
+    shapes, so a pre-Phase-2 save must be refused, not loaded silently."""
     ac, _, _ = make_ac_and_opts()
-    path = str(tmp_path / "old.pt")
-    torch.save(ac.state_dict(), path)
-    ckpt = load_checkpoint(path)
-    assert "model" in ckpt
+
+    # a phase-0 bare state_dict save
+    bare = str(tmp_path / "bare.pt")
+    torch.save(ac.state_dict(), bare)
+    with pytest.raises(ValueError, match="pre-Phase-2"):
+        load_checkpoint(bare)
+
+    # a phase-1 full dict that has no action_format tag
+    untagged = str(tmp_path / "untagged.pt")
+    torch.save({"model": ac.state_dict(), "epoch": 3}, untagged)
+    with pytest.raises(ValueError, match="action_format"):
+        load_checkpoint(untagged)
+
+
+def test_old_checkpoint_is_refused_by_eval_loader(tmp_path):
+    """opponents.load_state_dict (eval / frozen opponent path) refuses it too."""
+    from opponents import load_state_dict as opp_load
+
+    ac, _, _ = make_ac_and_opts()
+    untagged = str(tmp_path / "untagged.pt")
+    torch.save({"model": ac.state_dict(), "epoch": 1}, untagged)
+    with pytest.raises(ValueError, match="action_format"):
+        opp_load(untagged)
+
+
+def test_new_checkpoint_loads_through_both_paths(tmp_path):
+    """a Phase 2 save (carrying action_format) loads cleanly in both loaders."""
+    from opponents import load_state_dict as opp_load
+
+    ac, pi_opt, vf_opt = make_ac_and_opts()
+    path = str(tmp_path / "new.pt")
+    save_checkpoint(path, ac, pi_opt, vf_opt, epoch=0, lr_step=0)
+    assert load_checkpoint(path)["action_format"] == Shared_memory_link.PROTOCOL_VERSION
+    sd = opp_load(path)
     ac2, _, _ = make_ac_and_opts()
-    ac2.load_state_dict(ckpt["model"])
+    ac2.load_state_dict(sd)
 
 
 def test_pool_round_trip_empty(tmp_path):

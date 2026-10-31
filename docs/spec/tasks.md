@@ -38,11 +38,11 @@ library API names unchanged.
 
 ## Phase 2: new action shape (angle + power)
 
-- [ ] 2.1 Decode each player as angle (`a * pi`, seam at "straight back toward own goal") and power (`0.2 + 0.8 * (p + 1) / 2`) in the team's mirrored frame; action stays 6 numbers. (R13)
-- [ ] 2.2 `Player.Launch(powerScale)`: scale launch force instead of always normalizing; apply from `GameManager.ApplyTeamAction`. (R14)
-- [ ] 2.3 `ChaserOpponent` and `evaluate.py --human` output angle + power; human drag length -> power. (R15)
-- [ ] 2.4 Bump `PROTOCOL_VERSION` in `SharedMemory.cs` and `shared_memory_link.py` (still 120 bytes); old/new refuse each other. (R16)
-- [ ] 2.5 **Test (T1, T4):** T1 angle/power decode + mirror-frame round trip; T4 live smoke; power 0.2 moves a player clearly less than power 1.0. (R17, R48, R49, R52)
+- [x] 2.1 Decode each player as angle (`a * pi`, seam at "straight back toward own goal") and power (`0.2 + 0.8 * (p + 1) / 2`) in the team's mirrored frame; action stays 6 numbers. (R13)
+- [x] 2.2 `Player.Launch(powerScale)`: scale launch force instead of always normalizing; apply from `GameManager.ApplyTeamAction`. (R14)
+- [x] 2.3 `ChaserOpponent` and `evaluate.py --human` output angle + power; human drag length -> power. (R15)
+- [x] 2.4 Bump `PROTOCOL_VERSION` in `SharedMemory.cs` and `shared_memory_link.py` (still 120 bytes); old/new refuse each other. (R16)
+- [x] 2.5 **Test (T1, T4):** T1 angle/power decode + mirror-frame round trip; T4 live smoke; power 0.2 moves a player clearly less than power 1.0. (R17, R48, R49, R52)
 
 ---
 

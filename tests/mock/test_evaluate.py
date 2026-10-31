@@ -9,12 +9,14 @@ import os
 import numpy as np
 import pytest
 import torch
+from torch.optim import Adam
 
 from shared_memory_link import Shared_memory_link
 from bobble_league_env import Bobble_league_env
 from neural_network import Actor_critic_neural_network
 from opponents import PolicyOpponent, load_state_dict
 from evaluate import latest_checkpoint
+from training_loop import save_checkpoint
 from mock_godot import Mock_godot
 
 
@@ -35,10 +37,13 @@ def test_latest_checkpoint_raises_when_empty(tmp_path):
 
 
 def test_evaluate_plays_a_few_games(tmp_path):
-    # save a small random network, then load it the way evaluate does
+    # save a small random network the way training does (tagged action_format),
+    # then load it the way evaluate does
     ckpt = str(tmp_path / "ppo_epoch_0.pt")
     net = Actor_critic_neural_network(obs_dim=14, act_dim=6)
-    torch.save(net.state_dict(), ckpt)
+    pi_opt = Adam(list(net.pi_net.parameters()) + [net.log_std], lr=3e-4)
+    vf_opt = Adam(net.v_net.parameters(), lr=1e-3)
+    save_checkpoint(ckpt, net, pi_opt, vf_opt, epoch=0, lr_step=0)
 
     agent = PolicyOpponent(load_state_dict(ckpt), deterministic=True, name=ckpt)
 

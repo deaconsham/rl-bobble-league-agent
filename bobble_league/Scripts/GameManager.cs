@@ -177,6 +177,8 @@ public partial class GameManager : Node
             if (launchPlayer != null) {
                 Vector3 launchVector = (new Vector3(launchPlayer.Position.X, 0, launchPlayer.Position.Z) - MousePosition()) / dragDistance;
                 launchPlayer.input = launchVector;
+                // drag length is the power now: short drag = soft shot, clamped to [0.2, 1]
+                launchPlayer.launchPower = Mathf.Clamp(launchVector.Length(), MinPower, 1f);
             }
         }
     }
@@ -357,18 +359,28 @@ public partial class GameManager : Node
         isSimulating = true;
     }
 
-    // action = [p1_x, p1_z, p2_x, p2_z, p3_x, p3_z] from that team's side (see DataManager.FrameZ)
+    // action = [a1, p1, a2, p2, a3, p3] in that team's mirrored frame (protocol v3).
+    // angle a -> theta = a*pi from -z (seam at own goal), power p -> 0.2+0.8*(p+1)/2.
+    // matches bobble_league_env.decode_action. FrameZ flips z so team 2 aims the
+    // same world direction team 1 would from the mirror image.
+    const float MinPower = 0.2f;
     void ApplyTeamAction(float[] action, int team) {
         List<Player> teamPlayers = TeamPlayers(team);
         float zSign = DataManager.FrameZ(team);
         for (int i = 0; i < teamPlayers.Count; i++) {
             if (action == null || 2 * i + 1 >= action.Length) {
                 teamPlayers[i].input = Vector3.Zero;
+                teamPlayers[i].launchPower = 1f;
                 continue;
             }
-            float x = action[2 * i];
-            float z = action[2 * i + 1] * zSign;
+            float a = Mathf.Clamp(action[2 * i], -1f, 1f);
+            float p = Mathf.Clamp(action[2 * i + 1], -1f, 1f);
+            float theta = a * Mathf.Pi;
+            // (x, z) unit aim: a=0 -> -z (enemy goal), a=+-1 -> +z (own goal)
+            float x = Mathf.Sin(theta);
+            float z = -Mathf.Cos(theta) * zSign;
             teamPlayers[i].input = new Vector3(x, 0, z);
+            teamPlayers[i].launchPower = MinPower + (1f - MinPower) * (p + 1f) / 2f;
         }
     }
 

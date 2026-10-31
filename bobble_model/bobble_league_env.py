@@ -30,6 +30,80 @@ def split_obs(raw_obs):
     return o[0], o[1:4], o[4:7]
 
 
+# ---- action shape (angle + power), protocol v3 ----
+# each player gets 2 numbers: aim angle a and power p, both in [-1, 1], in the
+# team's mirrored frame (learner always attacks -z, own goal at +z).
+#   angle: theta = a * pi, measured from -z (the enemy goal). the -1/+1 seam
+#          therefore points straight back at own goal (+z), the move a player
+#          should need least.
+#   power: 0.2 + 0.8 * (p + 1) / 2, so a shot is 20% to 100% strength.
+# godot decodes the same way (ApplyTeamAction + Player.Launch(powerScale)) and
+# applies FrameZ to z, so both teams launch in the same world direction.
+MIN_POWER = 0.2
+ACTION_PAIRS = 3  # angle + power per player, 3 players
+
+
+def decode_power(p):
+    """Power number p in [-1, 1] -> scale in [0.2, 1.0]."""
+    p = np.clip(np.asarray(p, dtype=np.float32), -1.0, 1.0)
+    return MIN_POWER + (1.0 - MIN_POWER) * (p + 1.0) / 2.0
+
+
+def decode_angle(a):
+    """Angle number a in [-1, 1] -> (x, z) unit direction in the mirrored frame.
+
+    theta = a * pi from -z, so a=0 aims at the enemy goal (-z) and a=+-1 (the
+    seam) aims straight back at own goal (+z). Matches Godot's Atan2(x, z).
+    """
+    a = np.clip(np.asarray(a, dtype=np.float32), -1.0, 1.0)
+    theta = a * np.pi
+    x = np.sin(theta)
+    z = -np.cos(theta)
+    return np.stack([x, z], axis=-1).astype(np.float32)
+
+
+def decode_action(action):
+    """6-number action [a1, p1, a2, p2, a3, p3] -> (3, 2) launch vectors.
+
+    Each player's vector is its unit aim direction scaled by its power, in the
+    team's mirrored frame. Length is the power, so Player.Launch can scale by it.
+    """
+    action = np.asarray(action, dtype=np.float32).reshape(ACTION_PAIRS, 2)
+    angles = action[:, 0]
+    powers = action[:, 1]
+    dirs = decode_angle(angles)                 # (3, 2) unit
+    scale = decode_power(powers)[:, None]       # (3, 1)
+    return (dirs * scale).astype(np.float32)
+
+
+def encode_action(angles, powers):
+    """Inverse helper for scripted opponents: pack angle/power numbers into the
+    6-number wire action [a1, p1, a2, p2, a3, p3]."""
+    angles = np.asarray(angles, dtype=np.float32).reshape(ACTION_PAIRS)
+    powers = np.asarray(powers, dtype=np.float32).reshape(ACTION_PAIRS)
+    out = np.empty(6, dtype=np.float32)
+    out[0::2] = angles
+    out[1::2] = powers
+    return out
+
+
+def vector_to_action(vectors):
+    """(3, 2) mirrored-frame launch vectors -> 6-number wire action.
+
+    Used by the chaser and human input, which think in (x, z): the direction
+    sets the angle (a = atan2(x, -z) / pi, seam at own goal) and the vector
+    length sets the power (clamped into [0.2, 1], then back to [-1, 1])."""
+    vectors = np.asarray(vectors, dtype=np.float32).reshape(ACTION_PAIRS, 2)
+    x = vectors[:, 0]
+    z = vectors[:, 1]
+    theta = np.arctan2(x, -z)                   # inverse of decode_angle
+    angles = (theta / np.pi).astype(np.float32)
+    length = np.linalg.norm(vectors, axis=1)
+    scale = np.clip(length, MIN_POWER, 1.0)
+    powers = (2.0 * (scale - MIN_POWER) / (1.0 - MIN_POWER) - 1.0).astype(np.float32)
+    return encode_action(angles, powers)
+
+
 def opponent_view(raw_obs):
     """
     Learner-frame obs -> the same moment seen from the opponent's frame.
@@ -62,9 +136,11 @@ class Bobble_league_env(gym.Env):
 
     Observation (14, normalized to [-1, 1], learner's frame):
         [ball_x, ball_z, f1_x, f1_z, f2_x, f2_z, f3_x, f3_z, e1_x, e1_z, e2_x, e2_z, e3_x, e3_z]
-    Action (6, [-1, 1]): launch direction (x, z) for the 3 friendly players.
-        Player.Launch() normalizes it, so only the direction matters
-        (all zeros = that player does not move).
+    Action (6, [-1, 1]): angle + power per player [a1, p1, a2, p2, a3, p3] in the
+        team's mirrored frame. Godot decodes it (decode_action above): angle
+        a -> a*pi from -z (seam at own goal), power p -> 0.2 + 0.8*(p+1)/2.
+        The env passes the 6 numbers through; Godot does the decode so both teams
+        launch in the same world direction.
 
     Args:
         opponent: object with act(raw_obs) -> 6 actions in its own frame, and an
