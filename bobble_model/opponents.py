@@ -98,32 +98,105 @@ class PolicyOpponent:
         return self.net.act(normalize_obs(raw_obs), deterministic=self.deterministic).numpy()
 
 
+class LiveOpponent:
+    """
+    The CURRENT learner playing the opponent side (live vs live).
+
+    Unlike PolicyOpponent it holds a REFERENCE to the live actor-critic, not a
+    frozen copy, so its turns are on-policy and can be stored as training data.
+    It SAMPLES (never the deterministic mean) in its own mirrored frame and
+    records the (obs, action, value, log-prob) of its last turn so the training
+    loop can push the opponent side into a buffer with the right value and logp.
+
+    'obs' here is the normalized opponent-frame observation the net acted on, so
+    it matches exactly what the loop stores for Team B.
+    """
+    name = "live"
+
+    def __init__(self, ac):
+        self.ac = ac
+        self.last = None  # dict(obs, act, val, logp) from the most recent act()
+
+    def act(self, raw_obs):
+        obs = normalize_obs(raw_obs)
+        a, v, logp = self.ac.step(obs)
+        a_np = a.detach().cpu().numpy().reshape(6)
+        self.last = dict(
+            obs=np.asarray(obs, dtype=np.float32),
+            act=a_np.astype(np.float32),
+            val=float(v.detach().cpu().reshape(()).item()),
+            logp=float(logp.detach().cpu().reshape(()).item()),
+        )
+        return a_np
+
+
 class SelfPlayPool:
     """
     Self-play opponent. Keeps the last `max_size` snapshots of the learner.
-    Each episode (reset) it picks a past snapshot, or with `scripted_prob`
-    the scripted chaser, so the learner does not overfit to one opponent.
-    Until the first snapshot exists it always uses the chaser.
+    Each episode (reset) it picks one of three kinds of opponent so the learner
+    does not overfit to one:
+      - the scripted chaser (~`scripted_prob`, default 0.15),
+      - the LIVE learner itself (~`live_prob`, default 0.30) once a live net is
+        attached, so both teams can be trained on (Phase 5),
+      - otherwise a past frozen snapshot (~0.55).
+    Until the first snapshot exists it falls back to chaser / live only.
 
     Each snapshot carries a win rate (the learner's win rate against it, as the
     training loop records results). It is kept so a resumed run restores the pool
     exactly and so later phases can pick harder copies more often.
     """
 
-    def __init__(self, max_size=10, scripted_prob=0.2, hidden=(256, 256), seed=None):
+    def __init__(self, max_size=10, scripted_prob=0.15, live_prob=0.30,
+                 hidden=(256, 256), seed=None):
         self.max_size = max_size
         self.scripted_prob = scripted_prob
+        self.live_prob = live_prob
         self.hidden = tuple(hidden)
         self.snapshots = []
         self.win_rates = []  # learner win rate vs each snapshot, same index as snapshots
         self.rng = random.Random(seed)
         self.scripted = ChaserOpponent(seed=seed)
         self.policy = PolicyOpponent(hidden=hidden, name="self")
+        self.live = None  # LiveOpponent, set by attach_live() when a live net exists
         self.current = self.scripted
+        self._siblings = [self]  # pools sharing this snapshot list (set by make_siblings)
 
     @property
     def name(self):
         return self.current.name
+
+    def attach_live(self, ac):
+        """Give the pool the live actor-critic so it can play the learner side."""
+        self.live = LiveOpponent(ac)
+        for sib in self._siblings:
+            if sib is not self:
+                sib.live = LiveOpponent(ac)
+
+    def make_siblings(self, n):
+        """
+        Build `n` pools that SHARE this pool's snapshot list, win rates and RNG-free
+        settings, but each keep their OWN `current` opponent and policy buffer. With
+        N parallel games this lets every game pick (and remember) its own opponent
+        for the episode, while a snapshot added once is seen by all (shared list).
+        Returns the list of n pools; element 0 is this pool.
+        """
+        siblings = [self]
+        for i in range(1, n):
+            sib = SelfPlayPool(self.max_size, self.scripted_prob, self.live_prob,
+                               self.hidden, seed=None)
+            # share the mutable snapshot + win-rate LISTS so an add() is seen by all
+            sib.snapshots = self.snapshots
+            sib.win_rates = self.win_rates
+            sib.live = self.live
+            siblings.append(sib)
+        self._siblings = siblings
+        for sib in siblings:
+            sib._siblings = siblings
+        return siblings
+
+    def is_live_current(self):
+        """True when this game's current opponent is the live learner (store its data)."""
+        return self.current is self.live and self.live is not None
 
     def add(self, state_dict):
         cpu_copy = {k: v.detach().cpu().clone() for k, v in state_dict.items()}
@@ -134,11 +207,17 @@ class SelfPlayPool:
             self.win_rates.pop(0)
 
     def reset(self):
-        if not self.snapshots or self.rng.random() < self.scripted_prob:
+        r = self.rng.random()
+        if r < self.scripted_prob or not self.snapshots and self.live is None:
             self.current = self.scripted
-        else:
+        elif self.live is not None and r < self.scripted_prob + self.live_prob:
+            self.current = self.live
+        elif self.snapshots:
             self.policy.load(self.rng.choice(self.snapshots))
             self.current = self.policy
+        else:
+            # no frozen copies yet: fall back to the live learner, else the chaser
+            self.current = self.live if self.live is not None else self.scripted
 
     def act(self, raw_obs):
         return self.current.act(raw_obs)
@@ -148,7 +227,8 @@ class SelfPlayPool:
         Docstring for state:
 
         Everything needed to rebuild the pool after a resume: the snapshot weights,
-        their win rates, the size/prob settings and the RNG state.
+        their win rates, the size/prob settings and the RNG state. The live slot is
+        NOT saved (it is just a reference to the training net, re-attached on resume).
         """
         return {
             "snapshots": [{k: v.detach().cpu().clone() for k, v in s.items()}
@@ -156,6 +236,7 @@ class SelfPlayPool:
             "win_rates": list(self.win_rates),
             "max_size": self.max_size,
             "scripted_prob": self.scripted_prob,
+            "live_prob": self.live_prob,
             "hidden": self.hidden,
             "rng_state": self.rng.getstate(),
         }
@@ -164,6 +245,7 @@ class SelfPlayPool:
         """Docstring for load_state: restore the pool from a dict made by state()."""
         self.max_size = state.get("max_size", self.max_size)
         self.scripted_prob = state.get("scripted_prob", self.scripted_prob)
+        self.live_prob = state.get("live_prob", self.live_prob)
         self.snapshots = [dict(s) for s in state.get("snapshots", [])]
         self.win_rates = list(state.get("win_rates", [0.5] * len(self.snapshots)))
         if "rng_state" in state:

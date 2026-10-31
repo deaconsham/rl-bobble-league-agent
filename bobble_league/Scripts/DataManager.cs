@@ -21,14 +21,15 @@ public partial class DataManager : Node {
 
     // layout: [ball_x, ball_z, f1_x, f1_z, f2_x, f2_z, f3_x, f3_z, e1_x, e1_z, e2_x, e2_z, e3_x, e3_z]
     // (friendly = learnerTeam, all in learnerTeam's frame)
-    public void Export(bool done, float reward, bool reset, int learnerTeam, int scorer, int playMode) {
+    // turnSeconds is how long this turn took to settle in game seconds (0 on a reset).
+    public void Export(bool done, float reward, bool reset, int learnerTeam, int scorer, int playMode, float turnSeconds = 0f) {
         if (memory == null || !memory.IsReady) return;
         float[] obs = BuildObservation(learnerTeam);
 
         if (reset) {
             memory.SendResetResults(obs, learnerTeam, playMode);
         } else {
-            memory.SendStepResults(obs, reward, done, learnerTeam, scorer, playMode);
+            memory.SendStepResults(obs, reward, done, learnerTeam, scorer, playMode, turnSeconds);
         }
     }
 

@@ -141,6 +141,84 @@ class PPO_buffer:
             result[t] = x[t] + discount * result[t+1]
         return result
 
+class Opponent_buffer:
+    """
+    Docstring for Opponent_buffer class:
+
+    Variable-length buffer for the OPPONENT (Team B) side of live-vs-live games.
+
+    Unlike PPO_buffer (one fixed-size buffer per game, filled every turn), the
+    opponent side is only stored on the turns a game is live vs live, so its
+    length is not known ahead of time and differs per game. It keeps the two
+    teams' paths apart exactly like PPO_buffer: store() appends turns, finish_path()
+    closes the current path with GAE (bootstrapping from the critic on a cut path),
+    and get() returns the same obs/act/ret/adv/logp dict update_from_data wants.
+
+    The data is already in the opponent's own mirrored frame (the LiveOpponent
+    acted there), so no frame conversion happens here.
+    """
+
+    def __init__(self, gamma=0.99, lam=0.97):
+        self.gamma = gamma
+        self.lam = lam
+        self._reset_lists()
+
+    def _reset_lists(self):
+        self.obs, self.act, self.rew, self.val, self.logp = [], [], [], [], []
+        self.adv, self.ret = [], []
+        self.path_start = 0
+
+    def store(self, obs, act, rew, val, logp):
+        """Append one opponent turn (obs/act already in the opponent frame)."""
+        self.obs.append(np.asarray(obs, dtype=np.float32))
+        self.act.append(np.asarray(act, dtype=np.float32))
+        self.rew.append(float(rew))
+        self.val.append(float(val))
+        self.logp.append(float(logp))
+
+    def finish_path(self, last_val=0.0):
+        """
+        Close the open path with GAE-Lambda, same maths as PPO_buffer.finish_path.
+        last_val bootstraps a cut (truncated) path from the critic; a real goal
+        passes 0. Does nothing when no turns were stored since the last finish.
+        """
+        n = len(self.rew) - self.path_start
+        if n <= 0:
+            return
+        sl = slice(self.path_start, len(self.rew))
+        rews = np.append(np.asarray(self.rew[sl], dtype=np.float32), last_val)
+        vals = np.append(np.asarray(self.val[sl], dtype=np.float32), last_val)
+        deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
+        adv = PPO_buffer.discount_cumsum(deltas, self.gamma * self.lam)
+        ret = PPO_buffer.discount_cumsum(rews, self.gamma)[:-1]
+        self.adv.extend(adv.tolist())
+        self.ret.extend(ret.tolist())
+        self.path_start = len(self.rew)
+
+    def __len__(self):
+        return len(self.ret)
+
+    def get(self, device='cpu'):
+        """
+        Return the FINISHED turns as a data dict (advantages NOT normalized here;
+        join_and_normalize normalizes over the whole batch). Only fully-finished
+        paths are returned, so call finish_path() before get(). Clears the buffer.
+        An empty buffer returns correctly-shaped zero-row arrays.
+        """
+        n = len(self.ret)
+        obs_dim = self.obs[0].shape[-1] if self.obs else 14
+        act_dim = self.act[0].shape[-1] if self.act else 6
+        data = dict(
+            obs=np.asarray(self.obs[:n], dtype=np.float32).reshape(n, obs_dim),
+            act=np.asarray(self.act[:n], dtype=np.float32).reshape(n, act_dim),
+            ret=np.asarray(self.ret, dtype=np.float32),
+            adv=np.asarray(self.adv, dtype=np.float32),
+            logp=np.asarray(self.logp[:n], dtype=np.float32),
+        )
+        self._reset_lists()
+        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in data.items()}
+
+
 def compute_loss_pi(ac, data, clip_ratio=0.2):
     """
     Docstring for compute_loss_pi:
@@ -363,7 +441,7 @@ def load_checkpoint(path, map_location='cpu'):
         )
     return ckpt
 
-def join_and_normalize(buffers, device='cpu'):
+def join_and_normalize(buffers, device='cpu', extra_data=None):
     """
     Docstring for join_and_normalize:
 
@@ -371,8 +449,14 @@ def join_and_normalize(buffers, device='cpu'):
     paths never mix), concatenate them into one batch, and normalize the
     advantages over the WHOLE batch rather than per game. Returns the same dict
     shape update() expects.
+
+    extra_data: optional list of already-extracted data dicts (e.g. the opponent
+    side of live-vs-live games from Opponent_buffer.get()) to fold into the same
+    batch before the single whole-batch advantage normalization.
     """
     parts = [buf.get(device=device, normalize_adv=False) for buf in buffers]
+    if extra_data:
+        parts += [d for d in extra_data if d['obs'].shape[0] > 0]
     data = {k: torch.cat([p[k] for p in parts], dim=0) for k in parts[0]}
     adv = data['adv']
     data['adv'] = (adv - adv.mean()) / (adv.std() + 1e-8)
@@ -457,16 +541,22 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     device = get_device(device)
     print(f'Using device: {device}')
 
-    # ---- build the opponents: one per game, self-play games share one pool ----
+    # ---- build the opponents: one per game. self-play games each get their own
+    # pool (own 'current' opponent) that SHARES one snapshot list + the live net,
+    # so every game picks its own opponent while a snapshot added once is seen by all ----
     if vec_env is not None:
         n_games = vec_env.n_games
         opponents = vec_env.opponents
-        shared_pool = next((o for o in opponents if isinstance(o, SelfPlayPool)), None)
+        pools = [o for o in opponents if isinstance(o, SelfPlayPool)]
+        shared_pool = pools[0] if pools else None
     else:
         n_games = games
-        shared_pool = SelfPlayPool() if opponent == 'self' else None
-        opponents = [shared_pool if opponent == 'self' else make_opponent(opponent)
-                     for _ in range(n_games)]
+        if opponent == 'self':
+            shared_pool = SelfPlayPool()
+            opponents = shared_pool.make_siblings(n_games)
+        else:
+            shared_pool = None
+            opponents = [make_opponent(opponent) for _ in range(n_games)]
 
     # ---- build the env ----
     if vec_env is not None:
@@ -490,6 +580,11 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     ac.to(device)
     pi_optimizer = Adam(list(ac.pi_net.parameters()) + [ac.log_std], lr=pi_lr)
     vf_optimizer = Adam(ac.v_net.parameters(), lr=vf_lr)
+
+    # self-play: hand the live net to the pool so its 'live' slot can play the
+    # opponent side (and its turns become training data in live-vs-live games)
+    if shared_pool is not None:
+        shared_pool.attach_live(ac)
 
     start_epoch = 0
     resumed_lr_step = 0
@@ -533,10 +628,16 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     opp_name = getattr(opponents[0], 'name', 'none')
 
     # ---- main loop ----
+    from bobble_league_env import opponent_view
+
     for epoch in range(start_epoch, epochs):
         epoch_returns, epoch_lengths = [], []
         results = {'win': 0, 'loss': 0, 'timeout': 0}
         restarts = 0
+        turn_seconds_all = []          # every turn's settle time (game seconds)
+        opp_turns_stored = 0           # how many Team B turns went into training this epoch
+        # opponent-side (Team B) buffers: only filled on live-vs-live turns
+        opp_buffers = [Opponent_buffer(gamma, lam) for _ in range(n_games)]
 
         for t in range(per_game):
             a, v, logp = ac.step(o)                 # one batched call over all games
@@ -550,6 +651,16 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
                 buffers[g].store(o[g], a_np[g], r[g], float(v_np[g]), float(logp_np[g]))
                 ep_ret[g] += r[g]
                 ep_len[g] += 1
+                # turn length (game seconds); real Godot sends simTime, mocks a small spread
+                ts = step_infos[g].get('turn_seconds')
+                if ts is not None and not step_infos[g].get('restarted'):
+                    turn_seconds_all.append(float(ts))
+                # live vs live: store Team B's turn (already in the opponent frame)
+                opp = step_infos[g].get('opponent')
+                if opp is not None:
+                    opp_buffers[g].store(opp['obs'], opp['act'], opp['reward'],
+                                         opp['val'], opp['logp'])
+                    opp_turns_stored += 1
 
             o = next_o
             epoch_ended = t == per_game - 1
@@ -562,11 +673,17 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
                 if term or trunc or epoch_ended:
                     if term:
                         last_val = 0.0
+                        opp_last_val = 0.0
                     else:
                         # truncated / cut by epoch / restarted -> bootstrap from the critic
                         _, v_last, _ = ac.step(o[g])
                         last_val = v_last.item()
+                        # Team B's cut path bootstraps from the live net's value of
+                        # the opponent-frame next obs (the same net, mirrored view)
+                        _, opp_v_last, _ = ac.step(opponent_view(o[g]))
+                        opp_last_val = opp_v_last.item()
                     buffers[g].finish_path(last_val)
+                    opp_buffers[g].finish_path(opp_last_val)
                     if term or trunc:
                         epoch_returns.append(float(ep_ret[g]))
                         epoch_lengths.append(int(ep_len[g]))
@@ -576,8 +693,10 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
                         ep_ret[g] = 0.0
                         ep_len[g] = 0
 
-        # join per-game buffers, normalize advantages over the whole batch, update
-        data = join_and_normalize(buffers, device=device)
+        # join per-game buffers + the opponent (Team B) side of live-vs-live games,
+        # normalize advantages over the whole batch, update
+        opp_data = [buf.get(device=device) for buf in opp_buffers if len(buf) > 0]
+        data = join_and_normalize(buffers, device=device, extra_data=opp_data)
         update_info = update_from_data(ac, data, pi_optimizer, vf_optimizer,
                                        train_pi_iters, train_v_iters, target_kl, clip_ratio,
                                        minibatch_size=minibatch_size, n_passes=n_passes,
@@ -601,6 +720,18 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         writer.add_scalar('Training/Passes_Run', update_info['PassesRun'], epoch)
         writer.add_scalar('Training/Learning_Rate', cur_lr, epoch)
         writer.add_scalar('Training/Restarts', restarts, epoch)
+        writer.add_scalar('Data/Opponent_Turns_Stored', opp_turns_stored, epoch)
+        writer.add_scalar('Data/Batch_Size', int(data['obs'].shape[0]), epoch)
+
+        # turn-length histogram + summary stats in game seconds (R33): tells us
+        # whether MaxTurnSeconds (20 s) is far above where turns actually settle.
+        ts_arr = np.asarray(turn_seconds_all, dtype=np.float32)
+        if ts_arr.size:
+            writer.add_histogram('Turn_Length/Seconds', ts_arr, epoch)
+            writer.add_scalar('Turn_Length/Mean_Seconds', float(ts_arr.mean()), epoch)
+            writer.add_scalar('Turn_Length/Median_Seconds', float(np.median(ts_arr)), epoch)
+            writer.add_scalar('Turn_Length/P95_Seconds', float(np.percentile(ts_arr, 95)), epoch)
+            writer.add_scalar('Turn_Length/Max_Seconds', float(ts_arr.max()), epoch)
 
         print(f'\nEpoch: {epoch}')
         print(f"Episodes: {len(epoch_returns)} (W {results['win']} / L {results['loss']} / T {results['timeout']}), "
@@ -608,7 +739,12 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         print(f"LossPi: {update_info['LossPi']:.4f}  LossV: {update_info['LossV']:.4f}  "
               f"KL: {update_info['KL']:.4f}  Entropy: {update_info['Entropy']:.4f}  "
               f"ClipFrac: {update_info['ClipFrac']:.4f}  EV: {update_info['ExplainedVariance']:.3f}  "
-              f"passes: {update_info['PassesRun']}  lr: {cur_lr:.2e}\n")
+              f"passes: {update_info['PassesRun']}  lr: {cur_lr:.2e}")
+        if ts_arr.size:
+            print(f"Turn length (s): mean {ts_arr.mean():.2f}  median {np.median(ts_arr):.2f}  "
+                  f"p95 {np.percentile(ts_arr, 95):.2f}  max {ts_arr.max():.2f}")
+        print(f"Team B turns stored (live-vs-live): {opp_turns_stored}  "
+              f"batch {int(data['obs'].shape[0])}\n")
 
         # step the LR ramp down one notch for the next epoch
         lr_schedule.advance()

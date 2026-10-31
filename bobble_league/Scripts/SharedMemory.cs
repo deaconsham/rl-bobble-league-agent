@@ -8,7 +8,7 @@ using System.Threading;
 // uses a FILE-BACKED memory map so it works on Windows, macOS and Linux
 // (named maps without a file are Windows-only in .NET).
 //
-// Protocol v3 layout (120 bytes). Must match bobble_model/shared_memory_link.py.
+// Protocol v4 layout (124 bytes). Must match bobble_model/shared_memory_link.py.
 //   0-55   obs, 14 x f32           godot -> python  (learner's frame, see DataManager)
 //   56-79  learner action, 6 x f32 python -> godot  [a1,p1,a2,p2,a3,p3] angle+power, learner's frame
 //   80-83  reward, f32             godot -> python  (learner's point of view)
@@ -23,8 +23,11 @@ using System.Threading;
 //   92-115 opponent action, 6 x f32 python -> godot (opponent's own frame, angle+power)
 //   116    protocol version, u8    godot -> python
 //   117-119 pad
+//   120-123 turn seconds, f32      godot -> python  (game seconds the last turn took to settle)
+// v4 only GREW the buffer with turn-length telemetry; the action/obs contract is
+// unchanged, so checkpoints keep their own action_format tag (still 3).
 public class SharedMemory : IDisposable {
-    public const byte PROTOCOL_VERSION = 3;
+    public const byte PROTOCOL_VERSION = 4;
 
     private const int OBS_OFFSET = 0;
     private const int ACT_OFFSET = 56;
@@ -38,7 +41,8 @@ public class SharedMemory : IDisposable {
     private const int OPP_VALID_OFFSET = 90;
     private const int OPP_ACT_OFFSET = 92;
     private const int VERSION_OFFSET = 116;
-    private const int TOTAL_SIZE = 120;
+    private const int TURN_SECONDS_OFFSET = 120;
+    private const int TOTAL_SIZE = 124;
 
     public const int OBS_DIM = 14;
     public const int ACT_DIM = 6;
@@ -146,7 +150,7 @@ public class SharedMemory : IDisposable {
         return true;
     }
 
-    void WritePayload(float[] observation, float reward, bool done, int learnerTeam, int scorer, int playMode) {
+    void WritePayload(float[] observation, float reward, bool done, int learnerTeam, int scorer, int playMode, float turnSeconds) {
         if (observation.Length != OBS_DIM) {
             GD.PrintErr($"Observation needs {OBS_DIM} values, got {observation.Length}");
             return;
@@ -159,22 +163,24 @@ public class SharedMemory : IDisposable {
         _accessor.Write(LEARNER_TEAM_OFFSET, (byte)learnerTeam);
         _accessor.Write(SCORER_OFFSET, (byte)scorer);
         _accessor.Write(PLAY_MODE_OFFSET, (byte)playMode);
+        _accessor.Write(TURN_SECONDS_OFFSET, turnSeconds);
     }
 
     // sends everything back to python after a step, then releases python.
     // barrier makes sure python never sees the flag drop before the
-    // payload is written (matters on ARM)
-    public void SendStepResults(float[] observation, float reward, bool done, int learnerTeam, int scorer, int playMode) {
+    // payload is written (matters on ARM). turnSeconds is how long this turn
+    // took to settle in game seconds, so python can watch the turn-length spread.
+    public void SendStepResults(float[] observation, float reward, bool done, int learnerTeam, int scorer, int playMode, float turnSeconds) {
         if (!IsReady) return;
-        WritePayload(observation, reward, done, learnerTeam, scorer, playMode);
+        WritePayload(observation, reward, done, learnerTeam, scorer, playMode, turnSeconds);
         Thread.MemoryBarrier();
         _accessor.Write(STEP_REQ_OFFSET, (byte)0);
     }
 
-    // sends initial state after reset
+    // sends initial state after reset (a reset is not a turn, so 0 seconds)
     public void SendResetResults(float[] observation, int learnerTeam, int playMode) {
         if (!IsReady) return;
-        WritePayload(observation, 0f, false, learnerTeam, 0, playMode);
+        WritePayload(observation, 0f, false, learnerTeam, 0, playMode, 0f);
         Thread.MemoryBarrier();
         _accessor.Write(RESET_REQ_OFFSET, (byte)0);
     }

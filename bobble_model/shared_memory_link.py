@@ -23,7 +23,7 @@ class Shared_memory_link:
     File-backed memory-map bridge between Godot and Python.
     Works on Windows, macOS and Linux (both sides map the same file).
 
-    Protocol v3 layout (120 bytes). Must match bobble_league/Scripts/SharedMemory.cs.
+    Protocol v4 layout (124 bytes). Must match bobble_league/Scripts/SharedMemory.cs.
     - 0-55    Observation (14 f32), learner's frame       Godot -> Python
     - 56-79   Learner action (6 f32) [a1,p1,...] angle+power, learner's frame  Python -> Godot
     - 80-83   Reward (f32), goal reward from learner POV  Godot -> Python
@@ -36,11 +36,15 @@ class Shared_memory_link:
     - 90      Opponent action valid (u8)                  Python -> Godot
     - 92-115  Opponent action (6 f32), opponent's frame   Python -> Godot
     - 116     Protocol version (u8)                       Godot -> Python
+    - 120-123 Turn seconds (f32), game seconds the turn took to settle  Godot -> Python
+
+    v4 only GREW the buffer with turn-length telemetry; the action/obs contract is
+    unchanged, so a Phase 2-4 checkpoint's action_format stays 3.
 
     Start Godot FIRST: it zeroes the buffer and writes the version when it boots.
     """
 
-    PROTOCOL_VERSION = 3
+    PROTOCOL_VERSION = 4
 
     OBS_OFFSET = 0
     OBS_SIZE = 14 * 4
@@ -57,7 +61,9 @@ class Shared_memory_link:
     OPP_VALID_OFFSET = 90
     OPP_ACT_OFFSET = 92
     VERSION_OFFSET = 116
-    TOTAL_SIZE = 120
+    TURN_SECONDS_OFFSET = 120
+    TURN_SECONDS_SIZE = 4
+    TOTAL_SIZE = 124
 
     OBS_DIM = 14
     ACT_DIM = 6
@@ -151,6 +157,11 @@ class Shared_memory_link:
     def read_scorer(self):
         """0 = nobody scored this turn, 1 = learner scored, 2 = opponent scored."""
         return self.buf[self.SCORER_OFFSET]
+
+    def read_turn_seconds(self):
+        """Game seconds the last turn took to settle (0 right after a reset)."""
+        raw = self.buf[self.TURN_SECONDS_OFFSET:self.TURN_SECONDS_OFFSET + self.TURN_SECONDS_SIZE]
+        return struct.unpack('<f', raw)[0]
 
     def read_play_mode(self):
         return self.PLAY_MODES.get(self.buf[self.PLAY_MODE_OFFSET], "UNKNOWN")

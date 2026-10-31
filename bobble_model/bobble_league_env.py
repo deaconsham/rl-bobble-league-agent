@@ -211,6 +211,7 @@ class Bobble_league_env(gym.Env):
         goal_reward = self.bridge.read_reward()
         terminated = self.bridge.read_done()
         scorer = self.bridge.read_scorer()
+        turn_seconds = self.bridge.read_turn_seconds()
         self._raw_obs = raw_obs
 
         # On a goal Godot has already moved everyone back to kickoff,
@@ -219,7 +220,8 @@ class Bobble_league_env(gym.Env):
         reward = self.reward_config.goal * goal_reward + shaping
 
         truncated = (not terminated) and self.ep_len >= self.max_ep_len
-        info = {"goal_reward": goal_reward, "shaping": shaping, "scorer": scorer}
+        info = {"goal_reward": goal_reward, "shaping": shaping, "scorer": scorer,
+                "turn_seconds": float(turn_seconds)}
         return normalize_obs(raw_obs), float(reward), bool(terminated), bool(truncated), info
 
     # ---- reward shaping ----
@@ -412,6 +414,11 @@ class Vector_env:
         Wait for one game's turn and read its result. On a timeout (or a dead
         process) restart that one game and return a truncated turn so the caller
         bootstraps the path from the critic.
+
+        When the game's opponent is the live learner (live vs live), also compute
+        Team B's reward from ITS mirrored frame and expose the opponent-frame
+        transition in info, so the loop can store the opponent side as training
+        data. info always carries 'turn_seconds' (how long the turn took to settle).
         """
         try:
             self.bridges[i].wait_for_step(self.step_timeout)
@@ -424,18 +431,57 @@ class Vector_env:
         goal_reward = self.bridges[i].read_reward()
         terminated = self.bridges[i].read_done()
         scorer = self.bridges[i].read_scorer()
+        turn_seconds = self.bridges[i].read_turn_seconds()
         self._raw_obs[i] = raw_obs
 
         shaping = 0.0 if terminated else self._shaping(prev_raw, raw_obs)
         reward = self.reward_config.goal * goal_reward + shaping
         truncated = (not terminated) and self.ep_len[i] >= self.max_ep_len
         info = {"goal_reward": goal_reward, "shaping": shaping, "scorer": scorer,
-                "restarted": False}
+                "turn_seconds": float(turn_seconds), "restarted": False}
+
+        # live vs live: store Team B too, from its mirrored view. Team B's goal
+        # reward is the negated learner reward, its shaping is computed in the
+        # opponent frame (opponent_view flips z and swaps teams).
+        self._maybe_add_opponent_turn(i, info, prev_raw, raw_obs, goal_reward, terminated)
 
         if terminated or truncated:
             obs, _ = self._reset_one(i)
             return obs, float(reward), bool(terminated), bool(truncated), info
         return normalize_obs(raw_obs), float(reward), False, False, info
+
+    def _is_live_opponent(self, i):
+        """True when game i's opponent is currently the live learner (SelfPlayPool live slot)."""
+        opp = self.opponents[i]
+        return opp is not None and getattr(opp, "is_live_current", None) is not None and opp.is_live_current()
+
+    def _maybe_add_opponent_turn(self, i, info, prev_raw, raw_obs, goal_reward, terminated):
+        """
+        Fill info['opponent'] with Team B's transition for a live-vs-live game, so
+        the training loop can push it into the opponent-side buffer. The acting
+        obs/action/value/logp come from the LiveOpponent (recorded at act time,
+        already in the opponent frame); here we add the reward Team B earned.
+        """
+        if not self._is_live_opponent(i):
+            return
+        opp = self.opponents[i]
+        live = getattr(opp, "live", None)
+        last = getattr(live, "last", None) if live is not None else None
+        if last is None:
+            return
+        opp_goal_reward = -goal_reward  # a learner goal is Team B's loss, and vice versa
+        if terminated:
+            opp_shaping = 0.0
+        else:
+            opp_shaping = self._shaping(opponent_view(prev_raw), opponent_view(raw_obs))
+        opp_reward = self.reward_config.goal * opp_goal_reward + opp_shaping
+        info["opponent"] = {
+            "obs": last["obs"],
+            "act": last["act"],
+            "val": last["val"],
+            "logp": last["logp"],
+            "reward": float(opp_reward),
+        }
 
     def _restart_and_truncate(self, i, reason):
         """
@@ -463,7 +509,8 @@ class Vector_env:
                 self.launcher.launch_one(i)
                 self.bridges[i] = self.launcher.wait_for_handshake(i, timeout=self.step_timeout)
                 obs, _ = self._reset_one(i)
-                info = {"goal_reward": 0.0, "shaping": 0.0, "scorer": 0, "restarted": True}
+                info = {"goal_reward": 0.0, "shaping": 0.0, "scorer": 0,
+                        "turn_seconds": 0.0, "restarted": True}
                 # truncated so the training loop bootstraps the cut path from the critic
                 return obs, 0.0, False, True, info
             except (TimeoutError, RuntimeError, OSError) as e:

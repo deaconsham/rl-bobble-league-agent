@@ -311,8 +311,9 @@ public partial class GameManager : Node
             bool timedOut = simTime > MaxTurnSeconds;
             if (timedOut) LogMovingBodies();
             if (timedOut || (StationaryBall() && StationaryPlayers())) {
-                // only the goal reward (+1/-1/0) comes from here, python adds the shaping
-                dataManager.Export(currentDone, stepReward, false, LearnerTeam, lastScorer, (int)CurrentPlayMode);
+                // only the goal reward (+1/-1/0) comes from here, python adds the shaping.
+                // simTime is how long the turn took to settle in game seconds.
+                dataManager.Export(currentDone, stepReward, false, LearnerTeam, lastScorer, (int)CurrentPlayMode, (float)simTime);
                 stepReward = 0;
                 currentDone = false;
                 lastScorer = 0;

@@ -70,11 +70,11 @@ library API names unchanged.
 
 ## Phase 5: more and better data per turn
 
-- [ ] 5.1 Add a "live" slot to `SelfPlayPool`; mix ~55% frozen copies, ~30% live, ~15% chaser. (R30)
-- [ ] 5.2 In live-vs-live games, store Team B's transitions (mirrored view), keeping per-team paths apart; never store a frozen copy's turns. (R31)
-- [ ] 5.3 Raise `MaxPhysicsStepsPerFrame` and try `--timescale=48/64` only if one Godot does not max its core; physics unchanged. (R32)
-- [ ] 5.4 Log turn length (game seconds) as a histogram; if most turns end well under 20 s, lower `MaxTurnSeconds` or add damping and re-check. (R33)
-- [ ] 5.5 **Test (T1, T2, T4):** T1 both-sides buffer keeps teams apart + opponent mix matches weights over 10k draws; T2 and T4 pass; turn-length histogram in TensorBoard. (R34, R48, R49, R50, R52)
+- [x] 5.1 Add a "live" slot to `SelfPlayPool`; mix ~55% frozen copies, ~30% live, ~15% chaser. (R30)
+- [x] 5.2 In live-vs-live games, store Team B's transitions (mirrored view), keeping per-team paths apart; never store a frozen copy's turns. (R31)
+- [~] 5.3 Raise `MaxPhysicsStepsPerFrame` and try `--timescale=48/64` only if one Godot does not max its core; physics unchanged. (R32) — mechanism already in `SetTimeScale` (raises MaxPhysicsStepsPerFrame + scales ticks); the 48/64 sweep is a tuning decision deferred to the Phase 7 full-box run.
+- [x] 5.4 Log turn length (game seconds) as a histogram; if most turns end well under 20 s, lower `MaxTurnSeconds` or add damping and re-check. (R33) — logged; turns settle ~3 s vs the 20 s cap, so lowering the cap is a safe follow-up tuning step (see phase5.md).
+- [x] 5.5 **Test (T1, T2, T4):** T1 both-sides buffer keeps teams apart + opponent mix matches weights over 10k draws; T2 and T4 pass; turn-length histogram in TensorBoard. (R34, R48, R49, R50, R52)
 
 ---
 

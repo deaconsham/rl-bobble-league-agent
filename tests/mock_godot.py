@@ -1,14 +1,15 @@
 """
 fake godot for the mock game tests. opens the shm file, zeroes it, writes
-protocol v2, then answers reset and step requests with simple fake physics.
+protocol v4, then answers reset and step requests with simple fake physics.
 no real engine, no graphics. runs in-process on a thread so a test can tell
 it to hang or die.
 
 it mirrors the bits of GameManager/DataManager/SharedMemory the python side
 leans on: the learner is team 1, obs is 14 floats in the learner frame, a goal
-sets done=1 and scorer, and the step/reset flags are cleared when the turn is
-done. it does NOT copy the real jolt physics; positions just drift toward the
-ball so an episode ends in a handful of turns.
+sets done=1 and scorer, the step/reset flags are cleared when the turn is done,
+and each step reports a fake turn length in game seconds. it does NOT copy the
+real jolt physics; positions just drift toward the ball so an episode ends in a
+handful of turns.
 """
 import os
 import struct
@@ -17,7 +18,7 @@ import time
 
 import numpy as np
 
-# same layout as bobble_model/shared_memory_link.py (protocol v2, 120 bytes)
+# same layout as bobble_model/shared_memory_link.py (protocol v4, 124 bytes)
 OBS_OFFSET = 0
 ACT_OFFSET = 56
 REWARD_OFFSET = 80
@@ -30,9 +31,10 @@ PLAY_MODE_OFFSET = 89
 OPP_VALID_OFFSET = 90
 OPP_ACT_OFFSET = 92
 VERSION_OFFSET = 116
-TOTAL_SIZE = 120
+TURN_SECONDS_OFFSET = 120
+TOTAL_SIZE = 124
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 OBS_DIM = 14
 ACT_DIM = 6
 
@@ -41,7 +43,7 @@ class Mock_godot:
     """
     Docstring for Mock_godot:
 
-    A tiny stand-in for the Godot game, talking protocol v2 over a file-backed
+    A tiny stand-in for the Godot game, talking protocol v4 over a file-backed
     mmap. Start it (creates the file), then attach Shared_memory_link(path=...,
     create=False) in the test. Call stop() when done.
 
@@ -180,6 +182,10 @@ class Mock_godot:
                 self.buf[SCORER_OFFSET] = scorer
                 self.buf[LEARNER_TEAM_OFFSET] = self.learner_team
                 self.buf[PLAY_MODE_OFFSET] = self.play_mode
+                # fake turn length in game seconds: a small spread so the
+                # turn-length histogram has something to show (real Godot sends simTime)
+                turn_seconds = float(2.0 + 0.5 * (self._turn % 4))
+                self.buf[TURN_SECONDS_OFFSET:TURN_SECONDS_OFFSET + 4] = struct.pack("<f", turn_seconds)
                 self.buf[STEP_REQ_OFFSET] = 0
                 continue
 

@@ -1,5 +1,5 @@
 """
-T1: the 120-byte protocol v2 layout. checks every field's offset and size,
+T1: the 124-byte protocol v4 layout. checks every field's offset and size,
 the version byte on create, and that an older buffer is refused.
 """
 import struct
@@ -12,7 +12,7 @@ from shared_memory_link import Shared_memory_link
 
 def test_total_size_and_offsets_do_not_overlap():
     L = Shared_memory_link
-    assert L.TOTAL_SIZE == 120
+    assert L.TOTAL_SIZE == 124
     # obs 14 f32 at 0, action 6 f32 at 56
     assert L.OBS_OFFSET == 0 and L.OBS_SIZE == 14 * 4
     assert L.ACT_OFFSET == 56 and L.ACT_SIZE == 6 * 4
@@ -28,10 +28,12 @@ def test_total_size_and_offsets_do_not_overlap():
     assert L.OPP_VALID_OFFSET == 90
     assert L.OPP_ACT_OFFSET == 92
     assert L.VERSION_OFFSET == 116
+    assert L.TURN_SECONDS_OFFSET == 120 and L.TURN_SECONDS_SIZE == 4
     # opponent action (6 f32) fits before the version byte
     assert L.OPP_ACT_OFFSET + L.ACT_SIZE <= L.VERSION_OFFSET
-    # everything fits inside the buffer
-    assert L.VERSION_OFFSET < L.TOTAL_SIZE
+    # turn seconds sits after the version byte and inside the buffer
+    assert L.VERSION_OFFSET < L.TURN_SECONDS_OFFSET
+    assert L.TURN_SECONDS_OFFSET + L.TURN_SECONDS_SIZE <= L.TOTAL_SIZE
 
 
 def test_create_writes_version(tmp_path):
@@ -101,20 +103,32 @@ def test_old_version_is_refused(tmp_path):
         Shared_memory_link(path=path, create=False)
 
 
-def test_version_is_v3():
-    # Phase 2 bumped the protocol for the angle+power action
-    assert Shared_memory_link.PROTOCOL_VERSION == 3
+def test_version_is_v4():
+    # Phase 5 bumped the protocol to carry turn-length telemetry
+    assert Shared_memory_link.PROTOCOL_VERSION == 4
 
 
-def test_v2_buffer_is_refused(tmp_path):
-    # a pre-Phase-2 Godot (v2, the old x/z action) must be refused by new python
+def test_v3_buffer_is_refused(tmp_path):
+    # a pre-Phase-5 Godot (v3, no turn-seconds field) must be refused by new python
     path = str(tmp_path / "shm.dat")
     maker = Shared_memory_link(path=path, create=True)
-    maker.buf[maker.VERSION_OFFSET] = 2
+    maker.buf[maker.VERSION_OFFSET] = 3
     maker.close()
 
-    with pytest.raises(RuntimeError, match="protocol v2"):
+    with pytest.raises(RuntimeError, match="protocol v3"):
         Shared_memory_link(path=path, create=False)
+
+
+def test_turn_seconds_round_trip(tmp_path):
+    path = str(tmp_path / "shm.dat")
+    link = Shared_memory_link(path=path, create=True)
+    try:
+        # right after create the field is zero
+        assert link.read_turn_seconds() == pytest.approx(0.0)
+        link.buf[link.TURN_SECONDS_OFFSET:link.TURN_SECONDS_OFFSET + 4] = struct.pack("<f", 7.25)
+        assert link.read_turn_seconds() == pytest.approx(7.25)
+    finally:
+        link.close()
 
 
 def test_missing_file_is_refused(tmp_path):
