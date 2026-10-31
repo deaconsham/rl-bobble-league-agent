@@ -100,12 +100,18 @@ class SelfPlayPool:
     Each episode (reset) it picks a past snapshot, or with `scripted_prob`
     the scripted chaser, so the learner does not overfit to one opponent.
     Until the first snapshot exists it always uses the chaser.
+
+    Each snapshot carries a win rate (the learner's win rate against it, as the
+    training loop records results). It is kept so a resumed run restores the pool
+    exactly and so later phases can pick harder copies more often.
     """
 
     def __init__(self, max_size=10, scripted_prob=0.2, hidden=(256, 256), seed=None):
         self.max_size = max_size
         self.scripted_prob = scripted_prob
+        self.hidden = tuple(hidden)
         self.snapshots = []
+        self.win_rates = []  # learner win rate vs each snapshot, same index as snapshots
         self.rng = random.Random(seed)
         self.scripted = ChaserOpponent(seed=seed)
         self.policy = PolicyOpponent(hidden=hidden, name="self")
@@ -118,8 +124,10 @@ class SelfPlayPool:
     def add(self, state_dict):
         cpu_copy = {k: v.detach().cpu().clone() for k, v in state_dict.items()}
         self.snapshots.append(cpu_copy)
+        self.win_rates.append(0.5)  # unknown until games are played
         if len(self.snapshots) > self.max_size:
             self.snapshots.pop(0)
+            self.win_rates.pop(0)
 
     def reset(self):
         if not self.snapshots or self.rng.random() < self.scripted_prob:
@@ -130,6 +138,32 @@ class SelfPlayPool:
 
     def act(self, raw_obs):
         return self.current.act(raw_obs)
+
+    def state(self):
+        """
+        Docstring for state:
+
+        Everything needed to rebuild the pool after a resume: the snapshot weights,
+        their win rates, the size/prob settings and the RNG state.
+        """
+        return {
+            "snapshots": [{k: v.detach().cpu().clone() for k, v in s.items()}
+                          for s in self.snapshots],
+            "win_rates": list(self.win_rates),
+            "max_size": self.max_size,
+            "scripted_prob": self.scripted_prob,
+            "hidden": self.hidden,
+            "rng_state": self.rng.getstate(),
+        }
+
+    def load_state(self, state):
+        """Docstring for load_state: restore the pool from a dict made by state()."""
+        self.max_size = state.get("max_size", self.max_size)
+        self.scripted_prob = state.get("scripted_prob", self.scripted_prob)
+        self.snapshots = [dict(s) for s in state.get("snapshots", [])]
+        self.win_rates = list(state.get("win_rates", [0.5] * len(self.snapshots)))
+        if "rng_state" in state:
+            self.rng.setstate(state["rng_state"])
 
 
 def load_state_dict(path, map_location="cpu"):

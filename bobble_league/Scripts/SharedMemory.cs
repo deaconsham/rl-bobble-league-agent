@@ -57,12 +57,29 @@ public class SharedMemory : IDisposable {
         InitializeSharedMemory();
     }
 
-    // same rule as python: env var wins, else <temp dir>/bobble_league_mmap.dat
+    // path rule: --shm=<path> on the command line wins, then the env var,
+    // else <temp dir>/bobble_league_mmap.dat. the command-line option lets
+    // launch_games.py give each parallel godot its own file.
     public static string ResolvePath() {
+        string fromCmd = CmdlineShmPath();
+        if (!string.IsNullOrEmpty(fromCmd)) {
+            return fromCmd;
+        }
         string fromEnv = System.Environment.GetEnvironmentVariable(PathEnvVar);
         return string.IsNullOrEmpty(fromEnv)
             ? Path.Combine(Path.GetTempPath(), DefaultFileName)
             : fromEnv;
+    }
+
+    // reads --shm=<path> from the args after "--", same place GameManager reads
+    // --mode / --timescale. returns null when it is not given.
+    static string CmdlineShmPath() {
+        foreach (string arg in OS.GetCmdlineUserArgs()) {
+            if (arg.StartsWith("--shm=")) {
+                return arg.Substring("--shm=".Length);
+            }
+        }
+        return null;
     }
 
     // creates (or reuses) the backing file, maps it and zeroes it

@@ -176,3 +176,76 @@ class Mock_godot:
                 continue
 
             time.sleep(0.0005)
+
+
+class Mock_launcher:
+    """
+    Docstring for Mock_launcher class:
+
+    Stand-in for launch_games.Game_launcher used by the Vector_env mock tests.
+    Instead of starting real Godots it spins up Mock_godot threads, one per game,
+    each on its own shm file under a temp dir. Exposes the same surface Vector_env
+    leans on: shm_paths, launch_one, launch_all, wait_for_handshake, stop_one,
+    stop_all, plus the Shared_memory_link bridges the tests attach.
+
+    Args:
+        n_games: number of games.
+        tmp_dir: folder for the per-game shm files.
+        goal_after: turns before each mock game scores (ends an episode).
+        hang_games: set of indices whose mock starts hung (to test the timeout).
+    """
+
+    def __init__(self, n_games, tmp_dir, goal_after=3, hang_games=None):
+        import os as _os
+        self.n_games = n_games
+        self.tmp_dir = str(tmp_dir)
+        self.goal_after = goal_after
+        self.hang_games = set(hang_games or [])
+        self.shm_paths = [_os.path.join(self.tmp_dir, f"mmap_{i}.dat") for i in range(n_games)]
+        self.games = [None] * n_games
+        self.pids = [None] * n_games
+        self.launch_counts = [0] * n_games
+
+    def launch_one(self, index):
+        """start (or restart) the mock game at this index on its own shm file."""
+        if self.games[index] is not None:
+            self.games[index].stop()
+        game = Mock_godot(self.shm_paths[index], goal_after=self.goal_after,
+                          seed=index)
+        if index in self.hang_games:
+            game.set_hang(True)
+        self.games[index] = game
+        self.launch_counts[index] += 1
+        self.pids[index] = 1000 + index
+        return self.pids[index]
+
+    def launch_all(self):
+        for i in range(self.n_games):
+            self.launch_one(i)
+        return self.pids
+
+    def wait_for_handshake(self, index, timeout=10.0):
+        from shared_memory_link import Shared_memory_link
+        import time as _time
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                return Shared_memory_link(path=self.shm_paths[index], create=False)
+            except (RuntimeError, ValueError, FileNotFoundError):
+                _time.sleep(0.02)
+        raise TimeoutError(f"mock game {index} never handshook")
+
+    def kill_game(self, index):
+        """simulate a crash: the mock stops answering and releases its file."""
+        if self.games[index] is not None:
+            self.games[index].die()
+
+    def stop_one(self, index):
+        if self.games[index] is not None:
+            self.games[index].stop()
+            self.games[index] = None
+        self.pids[index] = None
+
+    def stop_all(self):
+        for i in range(self.n_games):
+            self.stop_one(i)
