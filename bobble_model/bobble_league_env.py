@@ -128,6 +128,46 @@ class RewardConfig:
     defence: float = 0.02           # penalty when no friendly is goal-side of the ball
     time_penalty: float = 0.0       # flat cost per turn, pushes for faster goals
 
+    def scaled(self, frac):
+        """
+        Docstring for scaled:
+
+        Return a copy with the per-turn SHAPING weights multiplied by `frac`,
+        leaving `goal` untouched (Phase 6 shaping fade, R39). frac=1 is the full
+        shaping, frac=0 turns every shaping term off so only the goal reward is
+        left. The goal reward never fades: the point is to end up playing for
+        goals, not "ball moved forward".
+        """
+        f = float(frac)
+        return RewardConfig(
+            goal=self.goal,
+            ball_to_goal=self.ball_to_goal * f,
+            players_to_ball=self.players_to_ball * f,
+            defence=self.defence * f,
+            time_penalty=self.time_penalty * f,
+        )
+
+
+def shaping_fade_fraction(epoch, total_epochs, fade_fraction=0.5):
+    """
+    Docstring for shaping_fade_fraction:
+
+    The shaping multiplier for a given epoch (Phase 6, R39). It falls linearly
+    from 1.0 at epoch 0 to 0.0 at the halfway epoch (`fade_fraction` of the run),
+    then stays at 0 for the rest of training. So the shaping is on early, when the
+    AI needs the nudge toward the ball and goal, and gone by the midpoint, when it
+    should be playing for goals alone.
+
+    epoch is 0-based. With total_epochs=100 and the default fade_fraction=0.5 the
+    multiplier is 1.0 at epoch 0, 0.5 at epoch 25, and 0.0 at epoch 50 and after.
+    A fade_fraction of 0 (or total_epochs <= 1) means no shaping from the start.
+    """
+    fade_end = max(0.0, float(fade_fraction) * (int(total_epochs) - 1))
+    if fade_end <= 0.0:
+        return 0.0
+    frac = 1.0 - (float(epoch) / fade_end)
+    return max(0.0, min(1.0, frac))
+
 
 class Bobble_league_env(gym.Env):
     """
@@ -446,9 +486,27 @@ class Vector_env:
         self._maybe_add_opponent_turn(i, info, prev_raw, raw_obs, goal_reward, terminated)
 
         if terminated or truncated:
+            self._maybe_record_pool_result(i, scorer if terminated else 0)
             obs, _ = self._reset_one(i)
             return obs, float(reward), bool(terminated), bool(truncated), info
         return normalize_obs(raw_obs), float(reward), False, False, info
+
+    def _maybe_record_pool_result(self, i, scorer):
+        """
+        Docstring for _maybe_record_pool_result:
+
+        When game i's opponent is a self-play pool playing a FROZEN copy, fold this
+        game's outcome into that copy's win rate (for PFSP) before the game resets
+        and the pool draws a new copy. scorer is 1 = learner won, 2 = opponent won,
+        0 = draw/timeout. Only frozen-copy games count: the live and chaser slots
+        have no snapshot index.
+        """
+        opp = self.opponents[i]
+        idx = getattr(opp, "last_index", None)
+        if idx is None or getattr(opp, "record_result", None) is None:
+            return
+        learner_won = 1.0 if scorer == 1 else 0.0 if scorer == 2 else 0.5
+        opp.record_result(idx, learner_won)
 
     def _is_live_opponent(self, i):
         """True when game i's opponent is currently the live learner (SelfPlayPool live slot)."""

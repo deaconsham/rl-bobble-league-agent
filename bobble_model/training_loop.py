@@ -502,7 +502,8 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
               log_dir='runs/ppo_experiment', opponent='self', snapshot_freq=5,
               init_checkpoint=None, reward_config=None, step_timeout=120.0,
               games=1, launcher=None, vec_env=None, resume=None,
-              minibatch_size=256, n_passes=10, ent_coef=0.005, max_grad_norm=0.5):
+              minibatch_size=256, n_passes=10, ent_coef=0.005, max_grad_norm=0.5,
+              pfsp=False, shaping_fade=False, shaping_fade_fraction=0.5):
     """
     Docstring for ppo_train:
 
@@ -552,7 +553,7 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     else:
         n_games = games
         if opponent == 'self':
-            shared_pool = SelfPlayPool()
+            shared_pool = SelfPlayPool(pfsp=pfsp)
             opponents = shared_pool.make_siblings(n_games)
         else:
             shared_pool = None
@@ -627,10 +628,19 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
 
     opp_name = getattr(opponents[0], 'name', 'none')
 
+    # ---- shaping fade (Phase 6, R39): the env's base shaping config; each epoch
+    # it is scaled toward 0 over the first `shaping_fade_fraction` of the run so
+    # the AI ends up playing for goals, not "ball moved forward". ----
+    from bobble_league_env import opponent_view, shaping_fade_fraction as _fade_frac
+    base_reward_config = env.reward_config
+
     # ---- main loop ----
-    from bobble_league_env import opponent_view
 
     for epoch in range(start_epoch, epochs):
+        # fade the per-turn shaping for this epoch (goal reward is kept)
+        if shaping_fade:
+            frac = _fade_frac(epoch, epochs, shaping_fade_fraction)
+            env.reward_config = base_reward_config.scaled(frac)
         epoch_returns, epoch_lengths = [], []
         results = {'win': 0, 'loss': 0, 'timeout': 0}
         restarts = 0
@@ -884,6 +894,13 @@ if __name__ == '__main__':
     parser.add_argument('--minibatch-size', type=int, default=256, help='SGD minibatch size')
     parser.add_argument('--n-passes', type=int, default=10, help='passes over the batch per update')
     parser.add_argument('--max-grad-norm', type=float, default=0.5, help='gradient clip norm for both nets')
+    # ---- phase 6: PFSP + shaping fade ----
+    parser.add_argument('--pfsp', action='store_true',
+                        help='pick frozen pool copies by (1-winrate)^2 instead of uniform')
+    parser.add_argument('--shaping-fade', action='store_true',
+                        help='fade the per-turn shaping weights to 0 over the first half of training')
+    parser.add_argument('--shaping-fade-fraction', type=float, default=0.5,
+                        help='fraction of the run over which shaping fades to 0 (default 0.5)')
     args = parser.parse_args()
 
     launcher = None
@@ -909,4 +926,7 @@ if __name__ == '__main__':
               ent_coef=args.ent_coef,
               minibatch_size=args.minibatch_size,
               n_passes=args.n_passes,
-              max_grad_norm=args.max_grad_norm)
+              max_grad_norm=args.max_grad_norm,
+              pfsp=args.pfsp,
+              shaping_fade=args.shaping_fade,
+              shaping_fade_fraction=args.shaping_fade_fraction)

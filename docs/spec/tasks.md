@@ -80,13 +80,13 @@ library API names unchanged.
 
 ## Phase 6: measure strength, pick opponents well
 
-- [ ] 6.1 `league_eval.py`: round-robin of checkpoints every 20 epochs, Elo per checkpoint, saved to CSV. (R35)
-- [ ] 6.2 Held-out opponents never added to the pool: alternate chaser, "defender" bot, random bot, replay of the winning move. (R36)
-- [ ] 6.3 Best gate: a new checkpoint must beat the previous best >55% over 100 games. (R37)
-- [ ] 6.4 PFSP: weight old-copy selection by `(1 - winrate)^2`, keeping ~15% chaser and ~30% live. (R38)
-- [ ] 6.5 Shaping fade: fade `RewardConfig` weights to ~0 over the first half of training. (R39)
-- [ ] 6.6 Play-time randomness: sample with std x 0.3 in `evaluate.py --human`. (R40)
-- [ ] 6.7 **Test (T1, T5):** T1 Elo math on known results + PFSP weights + shaping weight 0 at the halfway epoch; T5 runs on every 20-epoch save. (R41, R48, R49, R53)
+- [x] 6.1 `league_eval.py`: round-robin of checkpoints every 20 epochs, Elo per checkpoint, saved to CSV. (R35)
+- [x] 6.2 Held-out opponents never added to the pool: alternate chaser, "defender" bot, random bot, replay of the winning move. (R36)
+- [x] 6.3 Best gate: a new checkpoint must beat the previous best >55% over 100 games. (R37)
+- [x] 6.4 PFSP: weight old-copy selection by `(1 - winrate)^2`, keeping ~15% chaser and ~30% live. (R38)
+- [x] 6.5 Shaping fade: fade `RewardConfig` weights to ~0 over the first half of training. (R39)
+- [x] 6.6 Play-time randomness: sample with std x 0.3 in `evaluate.py --human`. (R40)
+- [x] 6.7 **Test (T1, T5):** T1 Elo math on known results + PFSP weights + shaping weight 0 at the halfway epoch; T5 runs on every 20-epoch save. (R41, R48, R49, R53)
 
 ---
 

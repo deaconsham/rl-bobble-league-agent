@@ -7,13 +7,20 @@ net is attached, that sibling pools share one snapshot list, and that the chaser
 still produces in-range angle+power actions.
 """
 import numpy as np
+import pytest
 
 from neural_network import Actor_critic_neural_network
 from opponents import (
     ChaserOpponent,
+    DefenderOpponent,
     LiveOpponent,
     PolicyOpponent,
+    RandomOpponent,
+    ReplayOpponent,
     SelfPlayPool,
+    TEST_ONLY_OPPONENTS,
+    make_test_opponent,
+    pfsp_weights,
 )
 
 
@@ -135,3 +142,140 @@ def test_mix_without_frozen_copies_uses_live_or_chaser():
         names.add(pool.name)
     assert names <= {"chaser", "live"}
     assert "self" not in names  # no frozen copies yet
+
+
+# ---- Phase 6: PFSP + held-out test opponents ----
+
+def test_pfsp_weights_favour_the_losers():
+    # win rates: beats copy0 always, 50/50 copy1, loses to copy2 always
+    w = pfsp_weights([1.0, 0.5, 0.0], power=2.0)
+    assert w.shape == (3,)
+    assert w.sum() == pytest.approx(1.0)
+    # (1-wr)^2 = 0, 0.25, 1 -> the copy it loses to is weighted most
+    assert w[2] > w[1] > w[0]
+    # the always-beaten copy is almost never picked (only the eps floor)
+    assert w[0] < 1e-3
+
+
+def test_pfsp_weights_empty_and_all_beaten():
+    assert pfsp_weights([]).shape == (0,)
+    # every copy beaten (winrate 1) -> (1-wr)^2 all ~0, falls back to near-uniform
+    w = pfsp_weights([1.0, 1.0, 1.0])
+    assert w.sum() == pytest.approx(1.0)
+    assert np.allclose(w, 1.0 / 3.0, atol=1e-3)
+
+
+def test_record_result_moves_win_rate_by_ema():
+    pool = SelfPlayPool(hidden=(32, 32), seed=0)
+    _fill_snapshots(pool, 2)
+    assert pool.win_rates == [0.5, 0.5]
+    pool.record_result(0, learner_won=1.0, alpha=0.1)
+    # 0.9*0.5 + 0.1*1.0 = 0.55
+    assert pool.win_rates[0] == pytest.approx(0.55)
+    pool.record_result(1, learner_won=0.0, alpha=0.1)
+    assert pool.win_rates[1] == pytest.approx(0.45)
+    # out-of-range / None index is a no-op
+    pool.record_result(None, 1.0)
+    pool.record_result(99, 1.0)
+    assert pool.win_rates == pytest.approx([0.55, 0.45])
+
+
+def test_pfsp_selection_biases_toward_the_hard_copy():
+    pool = SelfPlayPool(scripted_prob=0.0, live_prob=0.0, hidden=(32, 32),
+                        pfsp=True, seed=7)
+    _fill_snapshots(pool, 3)
+    # copy 2 is the one the learner loses to most
+    pool.win_rates[:] = [0.9, 0.5, 0.1]
+    counts = [0, 0, 0]
+    for _ in range(5000):
+        counts[pool.pick_snapshot_index()] += 1
+    # the hardest copy (index 2) is drawn the most, the easiest (0) the least
+    assert counts[2] > counts[1] > counts[0]
+
+
+def test_uniform_selection_when_pfsp_off():
+    pool = SelfPlayPool(scripted_prob=0.0, live_prob=0.0, hidden=(32, 32),
+                        pfsp=False, seed=3)
+    _fill_snapshots(pool, 3)
+    pool.win_rates[:] = [0.9, 0.5, 0.1]
+    counts = [0, 0, 0]
+    for _ in range(6000):
+        counts[pool.pick_snapshot_index()] += 1
+    # uniform: each ~2000, within sampling slack, regardless of win rate
+    for c in counts:
+        assert abs(c - 2000) < 300, counts
+
+
+def test_test_only_opponents_never_enter_the_pool():
+    # the held-out set is a known fixed list, and SelfPlayPool only ever plays
+    # its chaser / live / a frozen snapshot -> never a defender or replay.
+    assert set(TEST_ONLY_OPPONENTS) == {"random", "chaser", "defender", "replay"}
+    pool = SelfPlayPool(scripted_prob=0.15, live_prob=0.30, hidden=(32, 32),
+                        pfsp=True, seed=11)
+    pool.attach_live(_fresh_net())
+    _fill_snapshots(pool, 3)
+    names = set()
+    for _ in range(3000):
+        pool.reset()
+        names.add(pool.name)
+    # only the three training slots ever appear
+    assert names <= {"chaser", "live", "self"}
+    assert "defender" not in names and "replay" not in names
+
+
+def test_make_test_opponent_builds_each_held_out_one():
+    for name in TEST_ONLY_OPPONENTS:
+        opp = make_test_opponent(name, seed=0)
+        assert opp.name == name
+    with pytest.raises(ValueError):
+        make_test_opponent("not-a-real-opponent")
+
+
+def test_defender_output_shape_and_range():
+    defender = DefenderOpponent(seed=0)
+    raw = np.array([0, 2, 1, 5, -1, 6, 0, 7, -2, -6, 0, -8, 2, -7], dtype=np.float32)
+    action = defender.act(raw)
+    assert action.shape == (6,)
+    assert np.all(action[0::2] >= -1.0) and np.all(action[0::2] <= 1.0)
+    assert np.all(action[1::2] >= -1.0) and np.all(action[1::2] <= 1.0)
+
+
+def test_replay_opponent_repeats_and_wraps():
+    actions = [np.full(6, 0.1, dtype=np.float32), np.full(6, -0.2, dtype=np.float32)]
+    replay = ReplayOpponent(actions)
+    raw = np.zeros(14, dtype=np.float32)
+    a0 = replay.act(raw)
+    a1 = replay.act(raw)
+    a2 = replay.act(raw)  # wraps back to actions[0]
+    assert np.allclose(a0, 0.1)
+    assert np.allclose(a1, -0.2)
+    assert np.allclose(a2, 0.1)
+    replay.reset()
+    assert np.allclose(replay.act(raw), 0.1)
+
+
+def test_default_replay_is_a_full_power_straight_shot():
+    replay = ReplayOpponent()
+    a = replay.act(np.zeros(14, dtype=np.float32))
+    assert a.shape == (6,)
+    assert np.allclose(a[0::2], 0.0)   # angles straight at the enemy goal
+    assert np.allclose(a[1::2], 1.0)   # full power
+
+
+def test_policy_std_scale_affects_sampling_spread():
+    net = _fresh_net()
+    sd = net.state_dict()
+    raw = np.zeros(14, dtype=np.float32)
+    # deterministic: std_scale ignored, repeated calls are identical
+    det = PolicyOpponent(sd, deterministic=True, hidden=(32, 32), std_scale=0.3)
+    assert np.allclose(det.act(raw), det.act(raw))
+    # stochastic with a shrunk spread is tighter around the mean than full std
+    np.random.seed(0)
+    import torch
+    torch.manual_seed(0)
+    small = PolicyOpponent(sd, deterministic=False, hidden=(32, 32), std_scale=0.3)
+    wide = PolicyOpponent(sd, deterministic=False, hidden=(32, 32), std_scale=1.0)
+    mean = det.act(raw)
+    small_dev = np.std([small.act(raw) - mean for _ in range(200)])
+    wide_dev = np.std([wide.act(raw) - mean for _ in range(200)])
+    assert small_dev < wide_dev

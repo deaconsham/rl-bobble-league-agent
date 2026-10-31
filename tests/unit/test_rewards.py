@@ -6,7 +6,13 @@ from Godot; python only scales it by cfg.goal).
 import numpy as np
 import pytest
 
-from bobble_league_env import Bobble_league_env, RewardConfig, FIELD_HALF_Z, OPP_GOAL
+from bobble_league_env import (
+    Bobble_league_env,
+    RewardConfig,
+    FIELD_HALF_Z,
+    OPP_GOAL,
+    shaping_fade_fraction,
+)
 
 
 class Dummy_bridge:
@@ -95,3 +101,61 @@ def test_goal_scaling_keeps_sign_for_both_teams():
     assert cfg.goal * -1.0 == -1.0  # opponent scored
     cfg2 = RewardConfig(goal=2.0)
     assert cfg2.goal * 1.0 == 2.0
+
+
+# ---- Phase 6: shaping fade schedule (R39) ----
+
+def test_scaled_fades_shaping_but_keeps_the_goal_reward():
+    cfg = RewardConfig(goal=1.0, ball_to_goal=0.5, players_to_ball=0.05,
+                       defence=0.02, time_penalty=0.01)
+    half = cfg.scaled(0.5)
+    assert half.goal == 1.0                       # goal never fades
+    assert half.ball_to_goal == pytest.approx(0.25)
+    assert half.players_to_ball == pytest.approx(0.025)
+    assert half.defence == pytest.approx(0.01)
+    assert half.time_penalty == pytest.approx(0.005)
+
+
+def test_scaled_to_zero_turns_off_all_shaping():
+    cfg = RewardConfig(goal=1.0, ball_to_goal=0.5, players_to_ball=0.05,
+                       defence=0.02, time_penalty=0.01)
+    off = cfg.scaled(0.0)
+    assert off.goal == 1.0
+    assert off.ball_to_goal == 0.0
+    assert off.players_to_ball == 0.0
+    assert off.defence == 0.0
+    assert off.time_penalty == 0.0
+
+
+def test_fade_fraction_is_one_at_start_zero_at_halfway():
+    total = 100
+    # 1.0 at epoch 0
+    assert shaping_fade_fraction(0, total, 0.5) == pytest.approx(1.0)
+    # the halfway epoch of a 100-epoch run is index ~49.5; weight hits 0 there
+    # and stays 0 after. with fade_end = 0.5*(100-1) = 49.5:
+    assert shaping_fade_fraction(49, total, 0.5) == pytest.approx(1.0 - 49 / 49.5)
+    assert shaping_fade_fraction(50, total, 0.5) == pytest.approx(0.0)
+    assert shaping_fade_fraction(99, total, 0.5) == pytest.approx(0.0)
+
+
+def test_fade_fraction_hits_zero_exactly_at_the_halfway_epoch():
+    # a run whose halfway epoch is an integer: total 21 -> fade_end = 0.5*20 = 10
+    total = 21
+    assert shaping_fade_fraction(0, total, 0.5) == pytest.approx(1.0)
+    assert shaping_fade_fraction(5, total, 0.5) == pytest.approx(0.5)
+    assert shaping_fade_fraction(10, total, 0.5) == pytest.approx(0.0)
+    assert shaping_fade_fraction(20, total, 0.5) == pytest.approx(0.0)
+
+
+def test_fade_fraction_is_monotonic_non_increasing():
+    total = 40
+    vals = [shaping_fade_fraction(e, total, 0.5) for e in range(total)]
+    for a, b in zip(vals, vals[1:]):
+        assert b <= a + 1e-9
+
+
+def test_fade_fraction_degenerate_runs():
+    # fade_fraction 0 -> no shaping from the start
+    assert shaping_fade_fraction(0, 100, 0.0) == 0.0
+    # a one-epoch run has no room to fade -> 0
+    assert shaping_fade_fraction(0, 1, 0.5) == 0.0

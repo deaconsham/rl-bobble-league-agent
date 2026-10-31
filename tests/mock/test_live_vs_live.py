@@ -81,3 +81,32 @@ def test_non_live_game_reports_no_opponent_transition(tmp_path):
         assert infos[0].get('opponent') is None
     finally:
         env.close()
+
+
+def test_pfsp_win_rate_recorded_through_the_env(tmp_path):
+    # a frozen-copy game (no live, no chaser) scores after a few turns; the env
+    # should fold that outcome into the drawn copy's win rate for PFSP.
+    launcher = Mock_launcher(1, tmp_path, goal_after=3)
+    launcher.launch_all()
+    bridges = [launcher.wait_for_handshake(0)]
+    net = Actor_critic_neural_network(obs_dim=14, act_dim=6, hidden=[32, 32])
+    net.eval()
+    pool = SelfPlayPool(scripted_prob=0.0, live_prob=0.0, hidden=(32, 32),
+                        pfsp=True, seed=0)
+    pool.add(net.state_dict())  # one frozen copy
+    env = Vector_env(1, bridges=bridges, launcher=launcher, opponents=[pool],
+                     step_timeout=5.0)
+    try:
+        env.reset()
+        assert pool.name == "self"      # drew the frozen copy
+        assert pool.last_index == 0
+        before = list(pool.win_rates)
+        # step until the mock scores (goal_after=3) so a result is recorded
+        for _ in range(5):
+            _, _, term, trunc, _ = env.step(np.zeros((1, 6), dtype=np.float32))
+            if term[0] or trunc[0]:
+                break
+        # the win rate for copy 0 moved off its 0.5 start
+        assert pool.win_rates[0] != before[0]
+    finally:
+        env.close()

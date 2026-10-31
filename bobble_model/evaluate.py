@@ -30,14 +30,21 @@ def main():
     parser.add_argument('--checkpoint', default=None, help='default: newest checkpoints/ppo_epoch_*.pt')
     parser.add_argument('--episodes', type=int, default=10, help='0 = play until Ctrl+C')
     parser.add_argument('--opponent', default='chaser',
-                        help='AI_VS_AI only: chaser | random | still | none | path/to/checkpoint.pt')
+                        help='AI_VS_AI only: chaser | random | still | defender | replay | none | path/to/checkpoint.pt')
     parser.add_argument('--human', action='store_true', help='Godot is in HUMAN_VS_AI; wait for you forever')
     parser.add_argument('--stochastic', action='store_true', help='sample actions instead of using the mean')
     parser.add_argument('--max-ep-len', type=int, default=200)
     args = parser.parse_args()
 
     ckpt = args.checkpoint or latest_checkpoint()
-    agent = PolicyOpponent(load_state_dict(ckpt), deterministic=not args.stochastic, name=ckpt)
+    # --human: sample with a shrunk spread (std x0.3) so the AI is not perfectly
+    # repeatable and one fixed counter does not always work (R40). AI_VS_AI eval
+    # keeps the deterministic mean unless --stochastic is passed.
+    if args.human:
+        agent = PolicyOpponent(load_state_dict(ckpt), deterministic=False,
+                               std_scale=0.3, name=ckpt)
+    else:
+        agent = PolicyOpponent(load_state_dict(ckpt), deterministic=not args.stochastic, name=ckpt)
     opponent = None if args.human else make_opponent(args.opponent, deterministic=True)
 
     env = Bobble_league_env(opponent=opponent, max_ep_len=args.max_ep_len,

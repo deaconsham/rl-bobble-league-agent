@@ -11,9 +11,34 @@ import random
 import numpy as np
 import torch
 
-from bobble_league_env import normalize_obs, split_obs, vector_to_action
+from bobble_league_env import encode_action, normalize_obs, split_obs, vector_to_action
 from neural_network import Actor_critic_neural_network
 from shared_memory_link import Shared_memory_link
+
+
+def pfsp_weights(win_rates, power=2.0, eps=1e-6):
+    """
+    Docstring for pfsp_weights:
+
+    Prioritized fictitious self-play weighting (PFSP). Given the learner's win
+    rate against each pool copy, return a probability over the copies that favours
+    the ones it loses to more often, using weight `(1 - winrate) ** power`
+    (power 2 from AlphaStar). A copy the learner always beats (winrate 1) gets
+    weight ~0; one it always loses to (winrate 0) gets weight 1.
+
+    `eps` keeps a tiny floor so a copy is never picked with probability exactly 0
+    (it can still be sampled rarely), and so an all-beaten pool does not divide by
+    zero but falls back to uniform. Returns a numpy array that sums to 1; an empty
+    input returns an empty array.
+    """
+    wr = np.asarray(win_rates, dtype=np.float64)
+    if wr.size == 0:
+        return np.asarray([], dtype=np.float64)
+    weights = np.clip(1.0 - wr, 0.0, 1.0) ** power + eps
+    total = weights.sum()
+    if total <= 0:
+        return np.full(wr.shape, 1.0 / wr.size)
+    return weights / total
 
 
 class StillOpponent:
@@ -80,13 +105,81 @@ class ChaserOpponent:
         return vector_to_action(direction)
 
 
-class PolicyOpponent:
-    """A frozen actor-critic network (CPU)."""
+class DefenderOpponent:
+    """
+    Docstring for DefenderOpponent class:
 
-    def __init__(self, state_dict=None, deterministic=False, hidden=(256, 256), name="policy"):
+    Held-out test opponent (never enters the training pool). Each player sits
+    between the ball and its OWN goal and taps the ball away: it aims at a point
+    just goal-side of the ball (its own goal is +z in its frame) so a weak nudge
+    clears the ball rather than carrying it forward. A low fixed power keeps it
+    defensive, not an attacker in disguise. Used to measure whether the learner
+    can break down a parked defence, which beating its own copies does not show.
+    """
+    name = "defender"
+
+    def __init__(self, power=0.35, noise=0.05, seed=None):
+        self.power = power
+        self.noise = noise
+        self.rng = np.random.default_rng(seed)
+
+    def act(self, raw_obs):
+        ball, friendly, _ = split_obs(raw_obs)
+        # own goal is +z, so "goal-side of the ball" is a point a little beyond
+        # the ball toward +z; clearing from there pushes the ball to -z (away).
+        target = ball + np.array([0.0, -0.6], dtype=np.float32)
+        direction = target - friendly
+        dist = np.linalg.norm(direction, axis=1, keepdims=True) + 1e-6
+        unit = direction / dist + self.rng.normal(0.0, self.noise, size=direction.shape)
+        unit = unit / (np.linalg.norm(unit, axis=1, keepdims=True) + 1e-6)
+        # fixed low power so it clears rather than shoots
+        vectors = unit * self.power
+        return vector_to_action(vectors)
+
+
+class ReplayOpponent:
+    """
+    Docstring for ReplayOpponent class:
+
+    Held-out test opponent (never enters the training pool). Replays a fixed
+    recorded move every turn, cycling through the recorded frames. This stands in
+    for "a replay of the winning move": a single counter the learner should not
+    keep losing to once it is strong. Pass a list of 6-number actions; it repeats
+    them in order and wraps around.
+    """
+    name = "replay"
+
+    def __init__(self, actions=None):
+        if actions is None or len(actions) == 0:
+            # default: all three players shoot straight at the enemy goal, full power
+            actions = [encode_action([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])]
+        self.actions = [np.asarray(a, dtype=np.float32).reshape(6) for a in actions]
+        self.i = 0
+
+    def reset(self):
+        self.i = 0
+
+    def act(self, raw_obs):
+        a = self.actions[self.i % len(self.actions)]
+        self.i += 1
+        return a.astype(np.float32)
+
+
+class PolicyOpponent:
+    """A frozen actor-critic network (CPU).
+
+    `std_scale` shrinks the sampling spread at play time: with deterministic off,
+    actions are sampled from the policy mean with its std multiplied by
+    `std_scale`. `evaluate.py --human` uses 0.3 so one fixed counter does not
+    always work, while the play stays close to the learned mean. It is ignored
+    when `deterministic` is True (the mean is used)."""
+
+    def __init__(self, state_dict=None, deterministic=False, hidden=(256, 256),
+                 name="policy", std_scale=1.0):
         self.net = Actor_critic_neural_network(obs_dim=14, act_dim=6, hidden=list(hidden))
         self.net.eval()
         self.deterministic = deterministic
+        self.std_scale = float(std_scale)
         self.name = name
         if state_dict is not None:
             self.load(state_dict)
@@ -95,7 +188,16 @@ class PolicyOpponent:
         self.net.load_state_dict(state_dict)
 
     def act(self, raw_obs):
-        return self.net.act(normalize_obs(raw_obs), deterministic=self.deterministic).numpy()
+        obs = normalize_obs(raw_obs)
+        if self.deterministic or self.std_scale == 1.0:
+            return self.net.act(obs, deterministic=self.deterministic).numpy()
+        # sample with a shrunk spread: mean + std_scale * std * noise
+        with torch.no_grad():
+            obs_t = torch.as_tensor(obs, dtype=torch.float32)
+            mu = self.net.pi_net(obs_t)
+            std = self.net.log_std.exp() * self.std_scale
+            action = mu + std * torch.randn_like(std)
+        return action.numpy().astype(np.float32)
 
 
 class LiveOpponent:
@@ -147,10 +249,11 @@ class SelfPlayPool:
     """
 
     def __init__(self, max_size=10, scripted_prob=0.15, live_prob=0.30,
-                 hidden=(256, 256), seed=None):
+                 hidden=(256, 256), pfsp=False, seed=None):
         self.max_size = max_size
         self.scripted_prob = scripted_prob
         self.live_prob = live_prob
+        self.pfsp = pfsp
         self.hidden = tuple(hidden)
         self.snapshots = []
         self.win_rates = []  # learner win rate vs each snapshot, same index as snapshots
@@ -159,6 +262,7 @@ class SelfPlayPool:
         self.policy = PolicyOpponent(hidden=hidden, name="self")
         self.live = None  # LiveOpponent, set by attach_live() when a live net exists
         self.current = self.scripted
+        self.last_index = None  # index of the frozen copy drawn this episode (PFSP)
         self._siblings = [self]  # pools sharing this snapshot list (set by make_siblings)
 
     @property
@@ -183,7 +287,7 @@ class SelfPlayPool:
         siblings = [self]
         for i in range(1, n):
             sib = SelfPlayPool(self.max_size, self.scripted_prob, self.live_prob,
-                               self.hidden, seed=None)
+                               self.hidden, pfsp=self.pfsp, seed=None)
             # share the mutable snapshot + win-rate LISTS so an add() is seen by all
             sib.snapshots = self.snapshots
             sib.win_rates = self.win_rates
@@ -198,6 +302,42 @@ class SelfPlayPool:
         """True when this game's current opponent is the live learner (store its data)."""
         return self.current is self.live and self.live is not None
 
+    def pick_snapshot_index(self):
+        """
+        Docstring for pick_snapshot_index:
+
+        Choose which frozen copy to play this episode. With `pfsp` on, copies the
+        learner loses to more often are picked more often (weight `(1-winrate)^2`,
+        from `pfsp_weights`); with it off, uniform. Draws from the pool's own RNG
+        so a resumed run repeats the same stream.
+        """
+        n = len(self.snapshots)
+        if self.pfsp and n > 0:
+            weights = pfsp_weights(self.win_rates)
+            # draw an index from the categorical weights using the pool's RNG
+            r = self.rng.random()
+            acc = 0.0
+            for i, w in enumerate(weights):
+                acc += float(w)
+                if r <= acc:
+                    return i
+            return n - 1
+        return self.rng.randrange(n)
+
+    def record_result(self, index, learner_won, alpha=0.1):
+        """
+        Docstring for record_result:
+
+        Fold one game's outcome into the win rate for snapshot `index` with an
+        exponential moving average (so recent games weigh more). `learner_won` is
+        1.0 for a learner win, 0.0 for a loss, 0.5 for a draw. PFSP reads these
+        rates to pick harder copies more often.
+        """
+        if index is None or not (0 <= index < len(self.win_rates)):
+            return
+        old = self.win_rates[index]
+        self.win_rates[index] = (1.0 - alpha) * old + alpha * float(learner_won)
+
     def add(self, state_dict):
         cpu_copy = {k: v.detach().cpu().clone() for k, v in state_dict.items()}
         self.snapshots.append(cpu_copy)
@@ -207,13 +347,16 @@ class SelfPlayPool:
             self.win_rates.pop(0)
 
     def reset(self):
+        self.last_index = None
         r = self.rng.random()
         if r < self.scripted_prob or not self.snapshots and self.live is None:
             self.current = self.scripted
         elif self.live is not None and r < self.scripted_prob + self.live_prob:
             self.current = self.live
         elif self.snapshots:
-            self.policy.load(self.rng.choice(self.snapshots))
+            idx = self.pick_snapshot_index()
+            self.last_index = idx
+            self.policy.load(self.snapshots[idx])
             self.current = self.policy
         else:
             # no frozen copies yet: fall back to the live learner, else the chaser
@@ -237,6 +380,7 @@ class SelfPlayPool:
             "max_size": self.max_size,
             "scripted_prob": self.scripted_prob,
             "live_prob": self.live_prob,
+            "pfsp": self.pfsp,
             "hidden": self.hidden,
             "rng_state": self.rng.getstate(),
         }
@@ -246,6 +390,7 @@ class SelfPlayPool:
         self.max_size = state.get("max_size", self.max_size)
         self.scripted_prob = state.get("scripted_prob", self.scripted_prob)
         self.live_prob = state.get("live_prob", self.live_prob)
+        self.pfsp = state.get("pfsp", self.pfsp)
         self.snapshots = [dict(s) for s in state.get("snapshots", [])]
         self.win_rates = list(state.get("win_rates", [0.5] * len(self.snapshots)))
         if "rng_state" in state:
@@ -290,6 +435,40 @@ def make_opponent(spec, deterministic=False):
         return RandomOpponent()
     if spec == "chaser":
         return ChaserOpponent()
+    if spec == "defender":
+        return DefenderOpponent()
+    if spec == "replay":
+        return ReplayOpponent()
     if spec == "self":
         return SelfPlayPool()
     return PolicyOpponent(load_state_dict(spec), deterministic=deterministic, name=str(spec))
+
+
+# ---- held-out test opponents (Phase 6, R36) ----
+# A fixed set used ONLY to measure real strength. These NEVER enter the training
+# pool: SelfPlayPool only ever plays its chaser slot, its live slot, or a frozen
+# snapshot of the learner, so nothing here can be sampled during training. They
+# are built on demand by make_test_opponent and read by league_eval.py.
+TEST_ONLY_OPPONENTS = ("random", "chaser", "defender", "replay")
+
+
+def make_test_opponent(name, seed=None):
+    """
+    Docstring for make_test_opponent:
+
+    Build one held-out test opponent by name (see TEST_ONLY_OPPONENTS). These are
+    anchors for strength measurement and are never added to the self-play pool.
+    'chaser' here is the harder, non-softened chaser (no kickoff easing) so the
+    test set is a real test, distinct from the pool's training chaser.
+    """
+    if name == "random":
+        return RandomOpponent(seed=seed)
+    if name == "chaser":
+        # a harder chaser than the pool's: no kickoff softening
+        return ChaserOpponent(kickoff_movers=3, kickoff_noise=0.1,
+                              kickoff_radius=0.0, seed=seed)
+    if name == "defender":
+        return DefenderOpponent(seed=seed)
+    if name == "replay":
+        return ReplayOpponent()
+    raise ValueError(f"unknown test opponent '{name}'; expected one of {TEST_ONLY_OPPONENTS}")
