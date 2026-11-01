@@ -392,7 +392,7 @@ public partial class GameManager : Node
 
     bool AnythingOutOfBounds() {
         if (ball != null && OutOfBounds(ball.GlobalPosition)) {
-            GD.Print($"  ball out at {ball.GlobalPosition}");
+            GD.Print($"  ball out at {ball.GlobalPosition} speed {ball.LinearVelocity.Length():0.0} vel {ball.LinearVelocity}");
             return true;
         }
         foreach (Node node in players.GetChildren()) {

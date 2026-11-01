@@ -27,6 +27,15 @@ data = PackedVector3Array(15.9173, 0, -30.3604, 18.3604, 0, 0, 5.7427, 0, -30.36
 [sub_resource type="BoxShape3D" id="BoxShape3D_lq7nq"]
 size = Vector3(8.53, 5, 5.085)
 
+[sub_resource type="BoxShape3D" id="BoxShape3D_cage_floor"]
+size = Vector3(60, 1, 60)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_cage_sidex"]
+size = Vector3(1, 12, 60)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_cage_endz"]
+size = Vector3(60, 12, 1)
+
 [sub_resource type="SphereShape3D" id="SphereShape3D_drvgu"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_20iik"]
@@ -141,6 +150,28 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.605, 0, -4.52)
 script = ExtResource("2_f6sb3")
 Team = 2
 
+[node name="Containment" type="StaticBody3D" parent="Static" unique_id=1430022001]
+
+[node name="Floor" type="CollisionShape3D" parent="Static/Containment" unique_id=1430022002]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.5, 0)
+shape = SubResource("BoxShape3D_cage_floor")
+
+[node name="WallXPos" type="CollisionShape3D" parent="Static/Containment" unique_id=1430022003]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10.5, 5, 0)
+shape = SubResource("BoxShape3D_cage_sidex")
+
+[node name="WallXNeg" type="CollisionShape3D" parent="Static/Containment" unique_id=1430022004]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10.5, 5, 0)
+shape = SubResource("BoxShape3D_cage_sidex")
+
+[node name="WallZPos" type="CollisionShape3D" parent="Static/Containment" unique_id=1430022005]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, 19)
+shape = SubResource("BoxShape3D_cage_endz")
+
+[node name="WallZNeg" type="CollisionShape3D" parent="Static/Containment" unique_id=1430022006]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, -19)
+shape = SubResource("BoxShape3D_cage_endz")
+
 [node name="Dynamic" type="Node" parent="." unique_id=2080640139]
 
 [node name="Ball" type="RigidBody3D" parent="Dynamic" unique_id=1993317229 groups=["ball"]]
@@ -149,6 +180,7 @@ mass = 0.2
 physics_material_override = ExtResource("1_3253y")
 contact_monitor = true
 max_contacts_reported = 1
+continuous_cd = true
 linear_damp = 0.3
 angular_damp = 0.2
 script = ExtResource("5_mn0nn")
