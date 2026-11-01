@@ -29,17 +29,19 @@ import torch
 import torch.nn as nn
 
 from bobble_league_env import (
-    RewardConfig, Vector_env, normalize_obs, opponent_view,
+    RewardConfig, Vector_env, normalize_obs, opponent_view, wrap_action,
 )
-from neural_network import Actor_critic_neural_network
+from neural_network import Actor_critic_neural_network, INIT_LOG_STD
 from opponents import ChaserOpponent, SelfPlayPool
 from training_loop import (
     PPO_buffer, get_device, save_checkpoint,
 )
 
-# log_std init in Actor_critic_neural_network (-0.5). cloning drives the mean, not
-# the spread, but we reset it explicitly after so PPO starts with real noise.
-INIT_LOG_STD = -0.5
+# INIT_LOG_STD is imported from neural_network so the warm start keeps the SAME
+# small spread the network starts at (-1.6, sigma ~0.2). cloning drives the mean,
+# not the spread, but we reset log_std to this value after cloning so a wide
+# spread is never baked into the warm checkpoint. keeping it one shared constant
+# means the two files cannot drift apart (Phase 10, step 2).
 
 
 def collect_demos(vec_env, chaser_factory, n_turns, gamma=0.99, lam=0.97,
@@ -86,7 +88,10 @@ def collect_demos(vec_env, chaser_factory, n_turns, gamma=0.99, lam=0.97,
         actions = np.zeros((n_games, act_dim), dtype=np.float32)
         for g in range(n_games):
             raw = vec_env._raw_obs[g]
-            actions[g] = np.clip(learner_bots[g].act(raw), -1.0, 1.0)
+            # wrap the angle slots, clip the power slots (Phase 10, step 3). the
+            # chaser's angles are already in range (atan2/pi), so this is a no-op
+            # for it, but it keeps every clip site consistent.
+            actions[g] = wrap_action(learner_bots[g].act(raw))
 
         next_o, r, terminated, truncated, step_infos = vec_env.step(actions)
 

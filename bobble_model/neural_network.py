@@ -3,6 +3,14 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal, Independent
 
+# starting log std for the policy's action spread. -1.6 is sigma ~0.2 (~36 deg of
+# the +-180 deg aim range): a small starting spread aims the first shots tightly,
+# which a large study found speeds up training (Andrychowicz et al. 2020,
+# https://arxiv.org/abs/2006.05990). warm_start.py keeps this same value through
+# cloning (its INIT_LOG_STD must match), and the training loop resets log_std to
+# it after loading an init checkpoint so an old save's wide spread is not reused.
+INIT_LOG_STD = -1.6
+
 def ortho_init(layer, gain):
     """
     Docstring for ortho_init
@@ -50,7 +58,7 @@ class Actor_critic_neural_network(nn.Module):
         Class contains two different neural networks:
         Actor (pi_net): Decides what to do (returns action means)
         Critic (v_net): Estimates how good the situation is (returns value)
-        Standard deviation (log_std): Natural log of the standard deviation, initialized to -0.5 (~0.61) as a parameter to be optimized
+        Standard deviation (log_std): Natural log of the standard deviation, initialized to -1.6 (sigma ~0.2) as a parameter to be optimized. A small starting spread aims the first shots tightly; a large study found a low starting spread speeds up training (Andrychowicz et al. 2020).
         
         :param obs_dim: Size of the observation vector
         :param act_dim: Size of the action vector
@@ -67,7 +75,7 @@ class Actor_critic_neural_network(nn.Module):
                                      hidden_gain=root_two, out_gain=0.01)
         self.v_net = neural_network([obs_dim] + hidden + [1],
                                     hidden_gain=root_two, out_gain=1.0)
-        self.log_std = nn.Parameter(-0.5 * torch.ones(act_dim))
+        self.log_std = nn.Parameter(INIT_LOG_STD * torch.ones(act_dim))
     
     def forward(self, obs):
         """

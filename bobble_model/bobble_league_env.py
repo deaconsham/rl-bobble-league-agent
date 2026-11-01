@@ -44,6 +44,37 @@ MIN_POWER = 0.2
 ACTION_PAIRS = 3  # angle + power per player, 3 players
 
 
+def wrap_angle(a):
+    """Wrap an angle number into [-1, 1) with a = (a + 1) % 2 - 1.
+
+    The angle axis is circular: a and a+2 both mean the same aim (theta differs
+    by 2*pi). Clipping a sample past the edge to +-1 instead pins it at the seam,
+    which points straight back at own goal - the worst move - so a policy whose
+    mean sits near an edge wastes every out-of-range sample on an own-goal shot.
+    Wrapping keeps the real aim: 1.1 -> -0.9 (just past the enemy-goal side comes
+    back round the near side), -1.1 -> 0.9, and large multiples fold in too. Only
+    the ANGLE slots wrap; power still clips (it is a magnitude, not circular).
+
+    Note a == +1 maps to -1, but both ends of the seam are the same direction
+    (own goal), so that is the same aim, not a jump."""
+    a = np.asarray(a, dtype=np.float32)
+    return ((a + 1.0) % 2.0 - 1.0).astype(np.float32)
+
+
+def wrap_action(action):
+    """Wrap the angle slots (0, 2, 4) of a 6-number action and clip the power
+    slots (1, 3, 5) to [-1, 1]. Returns a new array; the input is not changed.
+
+    This is the single clip/wrap applied to a decoded action before it reaches
+    Godot. PPO stores the PRE-wrap sampled action (its log-probs are under the
+    unwrapped Gaussian), so wrapping here only changes what is played, never what
+    is learned from."""
+    action = np.asarray(action, dtype=np.float32).reshape(-1).copy()
+    action[0::2] = wrap_angle(action[0::2])              # angle slots wrap
+    action[1::2] = np.clip(action[1::2], -1.0, 1.0)      # power slots clip
+    return action
+
+
 def decode_power(p):
     """Power number p in [-1, 1] -> scale in [0.2, 1.0]."""
     p = np.clip(np.asarray(p, dtype=np.float32), -1.0, 1.0)
@@ -51,12 +82,14 @@ def decode_power(p):
 
 
 def decode_angle(a):
-    """Angle number a in [-1, 1] -> (x, z) unit direction in the mirrored frame.
+    """Angle number a -> (x, z) unit direction in the mirrored frame.
 
-    theta = a * pi from -z, so a=0 aims at the enemy goal (-z) and a=+-1 (the
-    seam) aims straight back at own goal (+z). Matches Godot's Atan2(x, z).
+    a is WRAPPED into [-1, 1) (the angle axis is circular), then theta = a * pi
+    from -z, so a=0 aims at the enemy goal (-z) and the seam (a=+-1) aims straight
+    back at own goal (+z). Matches Godot's Atan2(x, z). Wrapping (not clipping)
+    keeps an out-of-range sample's real aim instead of pinning it at own goal.
     """
-    a = np.clip(np.asarray(a, dtype=np.float32), -1.0, 1.0)
+    a = wrap_angle(a)
     theta = a * np.pi
     x = np.sin(theta)
     z = -np.cos(theta)
@@ -233,12 +266,16 @@ class Bobble_league_env(gym.Env):
         return normalize_obs(self._raw_obs), info
 
     def step(self, action):
-        action = np.clip(np.asarray(action, dtype=np.float32).reshape(6), -1.0, 1.0)
+        # wrap the angle slots and clip the power slots before Godot sees them.
+        # the training loop has already stored the raw sampled action (its
+        # log-probs are under the unwrapped Gaussian), so this changes only what
+        # is played, not what is learned from (Phase 10, step 3).
+        action = wrap_action(np.asarray(action, dtype=np.float32).reshape(6))
         self.bridge.write_action(action)
 
         if self.opponent is not None and self.play_mode == "AI_VS_AI":
-            opp_action = np.clip(np.asarray(self.opponent.act(opponent_view(self._raw_obs)),
-                                            dtype=np.float32).reshape(6), -1.0, 1.0)
+            opp_action = wrap_action(np.asarray(self.opponent.act(opponent_view(self._raw_obs)),
+                                                dtype=np.float32).reshape(6))
             self.bridge.write_opponent_action(opp_action)
         else:
             self.bridge.write_opponent_action(None)
@@ -462,14 +499,18 @@ class Vector_env:
         return obs, rewards, terminated, truncated, infos
 
     def _write_turn(self, i, action):
-        """Docstring for _write_turn: write one game's action + opponent action, set its step flag."""
+        """Docstring for _write_turn: write one game's action + opponent action, set its step flag.
+
+        Angle slots are wrapped and power slots clipped before Godot sees them
+        (Phase 10, step 3). The training loop stored the raw sampled action, so
+        wrapping here changes only what is played, not what is learned from."""
         try:
-            action = np.clip(action, -1.0, 1.0)
+            action = wrap_action(action)
             self.bridges[i].write_action(action)
             opp = self.opponents[i]
             if opp is not None and self.play_mode[i] == "AI_VS_AI":
-                opp_action = np.clip(np.asarray(opp.act(opponent_view(self._raw_obs[i])),
-                                                dtype=np.float32).reshape(6), -1.0, 1.0)
+                opp_action = wrap_action(np.asarray(opp.act(opponent_view(self._raw_obs[i])),
+                                                    dtype=np.float32).reshape(6))
                 self.bridges[i].write_opponent_action(opp_action)
             else:
                 self.bridges[i].write_opponent_action(None)

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
-from neural_network import Actor_critic_neural_network
+from neural_network import Actor_critic_neural_network, INIT_LOG_STD
 from shared_memory_link import Shared_memory_link
 
 # the action meaning is tied to the wire protocol, so tag checkpoints with the
@@ -293,26 +293,36 @@ class Linear_lr_schedule:
     """
     Docstring for Linear_lr_schedule class:
 
-    Linear learning-rate decay to 0 over the whole run. One schedule drives both
-    optimizers from their own starting LRs. 'step' is the number of updates done so
-    far (0-based), 'total' is the planned number of updates (epochs). The fraction
-    left is (total - step) / total, so the last update runs at ~0.
+    Linear learning-rate decay over the run, held at a floor near the end. One
+    schedule drives both optimizers from their own starting LRs. 'step' is the
+    number of updates done so far (0-based), 'total' is the planned number of
+    updates (epochs). The fraction left is (total - step) / total, clamped to a
+    floor of `lr_floor_frac` of the start rate (Phase 10, step 4): the scratch run
+    in Phase 7 stopped learning once the LR decayed to ~7.5e-06, so the LR never
+    drops below 30% of its start rate here.
 
     The step is saved in the checkpoint (lr_step) and restored on resume, so the
     LR picks up exactly where it left off instead of snapping back to full.
     """
 
-    def __init__(self, optimizers, base_lrs, total, step=0):
+    # the LR never falls below this fraction of its start rate (Phase 10, step 4)
+    DEFAULT_FLOOR_FRAC = 0.3
+
+    def __init__(self, optimizers, base_lrs, total, step=0, lr_floor_frac=DEFAULT_FLOOR_FRAC):
         self.optimizers = list(optimizers)
         self.base_lrs = list(base_lrs)
         self.total = max(1, int(total))
         self.step_count = int(step)
+        self.lr_floor_frac = float(lr_floor_frac)
         self.apply()
 
     def frac_left(self):
-        """fraction of the run still to go, clamped to [0, 1]."""
+        """fraction of the run still to go, clamped to [lr_floor_frac, 1].
+
+        The lower clamp is the LR floor: the ramp bottoms out at lr_floor_frac of
+        the start rate rather than decaying all the way to 0."""
         left = (self.total - self.step_count) / self.total
-        return max(0.0, min(1.0, left))
+        return max(self.lr_floor_frac, min(1.0, left))
 
     def current_lrs(self):
         """the LRs the schedule wants right now (one per optimizer)."""
@@ -332,7 +342,7 @@ class Linear_lr_schedule:
 
 def update(ac, buf, pi_optimizer, vf_optimizer, train_pi_iters=80, 
            train_v_iters=80, target_kl=0.02, clip_ratio=0.2, device='cpu',
-           minibatch_size=256, n_passes=10, ent_coef=0.005, max_grad_norm=0.5):
+           minibatch_size=256, n_passes=10, ent_coef=0.0, max_grad_norm=0.5):
     """
     Perform a PPO update on a single full buffer.
 
@@ -513,8 +523,10 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
               log_dir='runs/ppo_experiment', opponent='self', snapshot_freq=5,
               init_checkpoint=None, reward_config=None, step_timeout=120.0,
               games=1, launcher=None, vec_env=None, resume=None,
-              minibatch_size=256, n_passes=10, ent_coef=0.005, max_grad_norm=0.5,
-              pfsp=False, shaping_fade=False, shaping_fade_fraction=0.5):
+              minibatch_size=256, n_passes=10, ent_coef=0.0, max_grad_norm=0.5,
+              pfsp=False, shaping_fade=False, shaping_fade_fraction=0.5,
+              live_elo_shm=None, live_elo_freq=10, live_elo_games=20,
+              live_elo_sigma=0.1, best_path='checkpoints/best.pt'):
     """
     Docstring for ppo_train:
 
@@ -616,7 +628,13 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     elif init_checkpoint:
         from opponents import load_state_dict
         ac.load_state_dict(load_state_dict(init_checkpoint))
-        print(f'Loaded weights from {init_checkpoint}')
+        # log_std is saved in every checkpoint, so an --init save carries whatever
+        # spread it was trained with (an old ppo_epoch save is sigma ~0.6). reset
+        # it to the small start value so a fresh run begins with the intended tight
+        # aim, not the init save's wide spread (Phase 10, step 2).
+        with torch.no_grad():
+            ac.log_std.fill_(float(INIT_LOG_STD))
+        print(f'Loaded weights from {init_checkpoint} (log_std reset to {INIT_LOG_STD})')
         if shared_pool is not None:
             shared_pool.add(ac.state_dict())
 
@@ -638,6 +656,69 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
           f"mode: {infos[0]['play_mode']}, opponent: {getattr(opponents[0], 'name', 'none')}")
 
     opp_name = getattr(opponents[0], 'name', 'none')
+
+    # ---- live Elo during training (Phase 10, steps 5-7) ----
+    # every live_elo_freq epochs the newest save plays the fixed chaser/defender
+    # anchors on ONE spare Godot game (live_elo_shm, launched by the caller like
+    # league_eval), scored both with the mean move and with a small fixed sigma.
+    # the mean-move Elo drives best.pt and the >100-drop roll-back. live_elo_shm
+    # None (mock tests, smoke) turns the whole block off.
+    live_elo_env = None
+    best_tracker = None
+    if live_elo_shm:
+        from bobble_league_env import Bobble_league_env
+        from opponents import make_test_opponent
+        from live_elo import (
+            Best_tracker, LIVE_ANCHORS, live_elo_rating, score_vs_anchors,
+            head_to_head,
+        )
+        live_elo_env = Bobble_league_env(
+            opponent=None, max_ep_len=max_ep_len, step_timeout=step_timeout,
+            bridge=Shared_memory_link(path=os.path.abspath(live_elo_shm), create=False))
+        live_anchors = {name: make_test_opponent(name) for name in LIVE_ANCHORS}
+        best_tracker = Best_tracker()
+
+    def run_live_elo(epoch):
+        """Score the current net on the spare game and fold the result into
+        best.pt / roll-back. Returns the mean-move Elo (or None when off)."""
+        state = {k: v.detach().cpu().clone() for k, v in ac.state_dict().items()}
+        # mean move (how play actually works) and a small fixed sigma (training
+        # samples noisy moves), step 7 - both scored, mean drives the decisions.
+        rec_mean = score_vs_anchors(live_elo_env, state, live_anchors,
+                                    n_games=live_elo_games, abs_std=None)
+        rec_noisy = score_vs_anchors(live_elo_env, state, live_anchors,
+                                     n_games=live_elo_games, abs_std=live_elo_sigma)
+        elo_mean = live_elo_rating({k: v for k, v in rec_mean.items()})
+        elo_noisy = live_elo_rating({k: v for k, v in rec_noisy.items()})
+
+        # best.pt gate needs a head-to-head vs the current best, only worth
+        # playing when this save could actually become best (higher mean Elo).
+        h2h = None
+        if best_tracker.best_elo is not None and elo_mean > best_tracker.best_elo \
+                and os.path.exists(best_path):
+            from opponents import load_state_dict as _load
+            h2h = head_to_head(live_elo_env, state, _load(best_path),
+                               n_games=live_elo_games)
+        decision = best_tracker.consider(epoch, elo_mean, head_to_head_record=h2h)
+        if decision['became_best']:
+            save_checkpoint(best_path, ac, pi_optimizer, vf_optimizer, epoch,
+                            lr_step=lr_schedule.step_count, opponent=shared_pool)
+        if decision['rollback']:
+            from opponents import load_state_dict as _load
+            ac.load_state_dict(_load(best_path))
+            with torch.no_grad():
+                ac.log_std.fill_(float(INIT_LOG_STD))
+
+        # TensorBoard, on the same scale as league_eval
+        writer.add_scalar('Elo/Live_Mean', elo_mean, epoch)
+        writer.add_scalar('Elo/Live_Sigma0p1', elo_noisy, epoch)
+        for name in LIVE_ANCHORS:
+            w, l, d = rec_mean[name]
+            total = max(1, w + l + d)
+            writer.add_scalar(f'Elo/WinRate_vs_{name}', w / total, epoch)
+        print(f"Live Elo @ {epoch}: mean {elo_mean:.1f}  sigma0.1 {elo_noisy:.1f}  "
+              f"best {best_tracker.best_elo:.1f} -> {decision['reason']}")
+        return elo_mean
 
     # ---- shaping fade (Phase 6, R39): the env's base shaping config; each epoch
     # it is scaled toward 0 over the first `shaping_fade_fraction` of the run so
@@ -783,14 +864,20 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
                             opponent=shared_pool)
             print(f'Model saved at epoch {epoch}')
 
+        # live Elo + best.pt + roll-back, on its own cadence (Phase 10, steps 5-7)
+        if live_elo_env is not None and (epoch % live_elo_freq == 0 or epoch == epochs - 1):
+            run_live_elo(epoch)
+
     writer.close()
     env.close()
+    if live_elo_env is not None:
+        live_elo_env.close()
     return ac
 
 
 def update_from_data(ac, data, pi_optimizer, vf_optimizer, train_pi_iters=80,
                      train_v_iters=80, target_kl=0.02, clip_ratio=0.2,
-                     minibatch_size=256, n_passes=10, ent_coef=0.005,
+                     minibatch_size=256, n_passes=10, ent_coef=0.0,
                      max_grad_norm=0.5):
     """
     Docstring for update_from_data:
@@ -901,7 +988,8 @@ if __name__ == '__main__':
     # ---- phase 3: PPO fixes (minibatch, KL, entropy, grad clip) ----
     parser.add_argument('--target-kl', type=float, default=0.02,
                         help='per-pass KL early-stop threshold (0.02-0.03)')
-    parser.add_argument('--ent-coef', type=float, default=0.005, help='entropy bonus coefficient')
+    parser.add_argument('--ent-coef', type=float, default=0.0,
+                        help='entropy bonus coefficient (0 is the CleanRL continuous default)')
     parser.add_argument('--minibatch-size', type=int, default=256, help='SGD minibatch size')
     parser.add_argument('--n-passes', type=int, default=10, help='passes over the batch per update')
     parser.add_argument('--max-grad-norm', type=float, default=0.5, help='gradient clip norm for both nets')
@@ -912,6 +1000,18 @@ if __name__ == '__main__':
                         help='fade the per-turn shaping weights to 0 over the first half of training')
     parser.add_argument('--shaping-fade-fraction', type=float, default=0.5,
                         help='fraction of the run over which shaping fades to 0 (default 0.5)')
+    # ---- phase 10: live Elo during training ----
+    parser.add_argument('--live-elo-shm', default=None,
+                        help='shm path of ONE spare running Godot game used to score live Elo '
+                             'every few epochs (launch it detached, like league_eval). Off when unset.')
+    parser.add_argument('--live-elo-freq', type=int, default=10,
+                        help='epochs between live-Elo checks')
+    parser.add_argument('--live-elo-games', type=int, default=20,
+                        help='games per anchor per live-Elo check')
+    parser.add_argument('--live-elo-sigma', type=float, default=0.1,
+                        help='absolute sigma for the noisy scoring pass (step 7); mean move drives best.pt')
+    parser.add_argument('--best-path', default='checkpoints/best.pt',
+                        help='where best.pt is written / rolled back from')
     args = parser.parse_args()
 
     launcher = None
@@ -940,4 +1040,9 @@ if __name__ == '__main__':
               max_grad_norm=args.max_grad_norm,
               pfsp=args.pfsp,
               shaping_fade=args.shaping_fade,
-              shaping_fade_fraction=args.shaping_fade_fraction)
+              shaping_fade_fraction=args.shaping_fade_fraction,
+              live_elo_shm=args.live_elo_shm,
+              live_elo_freq=args.live_elo_freq,
+              live_elo_games=args.live_elo_games,
+              live_elo_sigma=args.live_elo_sigma,
+              best_path=args.best_path)

@@ -172,14 +172,21 @@ class PolicyOpponent:
     actions are sampled from the policy mean with its std multiplied by
     `std_scale`. `evaluate.py --human` uses 0.3 so one fixed counter does not
     always work, while the play stays close to the learned mean. It is ignored
-    when `deterministic` is True (the mean is used)."""
+    when `deterministic` is True (the mean is used).
+
+    `abs_std` overrides the spread with an ABSOLUTE value (same for every action
+    slot) instead of scaling the net's own std. Scoring runs use abs_std=0.1 (the
+    small-sigma scoring in Phase 10, step 7) so the Elo number does not move with
+    whatever spread the net currently carries. abs_std takes precedence over
+    std_scale and is likewise ignored when deterministic is True."""
 
     def __init__(self, state_dict=None, deterministic=False, hidden=(256, 256),
-                 name="policy", std_scale=1.0):
+                 name="policy", std_scale=1.0, abs_std=None):
         self.net = Actor_critic_neural_network(obs_dim=14, act_dim=6, hidden=list(hidden))
         self.net.eval()
         self.deterministic = deterministic
         self.std_scale = float(std_scale)
+        self.abs_std = None if abs_std is None else float(abs_std)
         self.name = name
         if state_dict is not None:
             self.load(state_dict)
@@ -189,13 +196,16 @@ class PolicyOpponent:
 
     def act(self, raw_obs):
         obs = normalize_obs(raw_obs)
-        if self.deterministic or self.std_scale == 1.0:
+        if self.deterministic or (self.abs_std is None and self.std_scale == 1.0):
             return self.net.act(obs, deterministic=self.deterministic).numpy()
-        # sample with a shrunk spread: mean + std_scale * std * noise
+        # sample with a shrunk / fixed spread: mean + std * noise
         with torch.no_grad():
             obs_t = torch.as_tensor(obs, dtype=torch.float32)
             mu = self.net.pi_net(obs_t)
-            std = self.net.log_std.exp() * self.std_scale
+            if self.abs_std is not None:
+                std = torch.full_like(mu, self.abs_std)
+            else:
+                std = self.net.log_std.exp() * self.std_scale
             action = mu + std * torch.randn_like(std)
         return action.numpy().astype(np.float32)
 

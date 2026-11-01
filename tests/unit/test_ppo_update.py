@@ -98,11 +98,13 @@ def test_gradients_are_clipped_to_half():
     assert v_norm <= 0.5 + 1e-4
 
 
-def test_lr_decays_linearly_to_zero():
-    """the schedule ramps both LRs from their base to ~0 over the run."""
+def test_lr_decays_linearly_then_holds_at_floor():
+    """the schedule ramps both LRs down from their base, but never below 30% of
+    the base (Phase 10 LR floor), holding there for the rest of the run."""
     ac, pi_opt, vf_opt = make_ac_and_opts(pi_lr=3e-4, vf_lr=1e-3)
     epochs = 10
     sched = Linear_lr_schedule([pi_opt, vf_opt], [3e-4, 1e-3], total=epochs)
+    floor = Linear_lr_schedule.DEFAULT_FLOOR_FRAC
 
     # step 0: full LR
     assert pi_opt.param_groups[0]["lr"] == pytest.approx(3e-4)
@@ -116,10 +118,14 @@ def test_lr_decays_linearly_to_zero():
     # monotonically non-increasing
     for a, b in zip(lrs, lrs[1:]):
         assert b <= a
-    # halfway is ~half the base LR
-    assert lrs[epochs // 2] == pytest.approx(3e-4 * (epochs - epochs // 2) / epochs)
-    # last update ran at ~1/epochs of base, and after the final advance it is 0
-    assert pi_opt.param_groups[0]["lr"] == pytest.approx(0.0, abs=1e-12)
+    # never below the floor (30% of base)
+    for lr in lrs:
+        assert lr >= 3e-4 * floor - 1e-12
+    # the final LR is pinned at the floor, not at ~0
+    assert pi_opt.param_groups[0]["lr"] == pytest.approx(3e-4 * floor)
+    assert vf_opt.param_groups[0]["lr"] == pytest.approx(1e-3 * floor)
+    # a point still on the ramp (before the floor bites) follows the linear rule
+    assert lrs[2] == pytest.approx(3e-4 * (epochs - 2) / epochs)
 
 
 def test_lr_step_saves_and_resumes_mid_decay(tmp_path):

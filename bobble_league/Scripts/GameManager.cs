@@ -394,7 +394,11 @@ public partial class GameManager : Node
                 teamPlayers[i].launchPower = 1f;
                 continue;
             }
-            float a = Mathf.Clamp(action[2 * i], -1f, 1f);
+            // wrap the angle (the aim axis is circular), clamp the power. this
+            // matches python's wrap_angle: a=1.1 -> -0.9, a=-1.1 -> 0.9. PosMod
+            // keeps the sign of the divisor, so negatives wrap the same way
+            // python's % does (a plain C# % would leave them out of range).
+            float a = Mathf.PosMod(action[2 * i] + 1f, 2f) - 1f;
             float p = Mathf.Clamp(action[2 * i + 1], -1f, 1f);
             float theta = a * Mathf.Pi;
             // (x, z) unit aim: a=0 -> -z (enemy goal), a=+-1 -> +z (own goal)
