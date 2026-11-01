@@ -65,3 +65,44 @@ def test_resume_restores_pool(tmp_path, monkeypatch):
     ckpt = load_checkpoint("checkpoints/ppo_epoch_1.pt")
     assert "pool" in ckpt
     assert len(ckpt["pool"]["snapshots"]) >= 1
+
+
+def test_single_game_shaping_fade(tmp_path, monkeypatch):
+    # regression: the games == 1 path wraps the env in _Single_env_as_vector, and
+    # the shaping-fade loop reads and rewrites env.reward_config each epoch. the
+    # shim used to drop that attribute, so a single-game run with shaping_fade
+    # crashed with AttributeError. it must now run end to end and actually fade
+    # the shaping on the wrapped env.
+    import os
+
+    from mock_godot import Mock_godot
+    from shared_memory_link import Shared_memory_link
+    from bobble_league_env import Bobble_league_env
+
+    monkeypatch.chdir(tmp_path)
+    path = str(tmp_path / "shm.dat")
+    game = Mock_godot(path, goal_after=3, scorer=1)
+    made = {}
+
+    def env_fn(opponent=None, reward_config=None, max_ep_len=1000, step_timeout=120.0):
+        bridge = Shared_memory_link(path=path, create=False)
+        env = Bobble_league_env(opponent=opponent, reward_config=reward_config,
+                                max_ep_len=max_ep_len, step_timeout=step_timeout,
+                                bridge=bridge)
+        made["env"] = env
+        return env
+
+    try:
+        ppo_train(env_fn=env_fn, games=1, epochs=2, steps_per_epoch=30,
+                  save_freq=1, device="cpu", log_dir=str(tmp_path / "runs"),
+                  step_timeout=5.0, max_ep_len=30, shaping_fade=True,
+                  shaping_fade_fraction=0.5, train_pi_iters=2, train_v_iters=2)
+        # it ran without AttributeError and wrote a checkpoint
+        assert os.path.exists("checkpoints/ppo_epoch_0.pt")
+        # the fade reached the wrapped env: epoch 1 of 2 with fraction 0.5 scales
+        # the per-turn shaping to 0, so the shaping weights are below their base
+        cfg = made["env"].reward_config
+        assert cfg.ball_to_goal == 0.0 and cfg.players_to_ball == 0.0
+    finally:
+        made.get("env") and made["env"].close()
+        game.stop()

@@ -478,6 +478,17 @@ class _Single_env_as_vector:
         self.observation_space = env.observation_space
         self.action_space = env.action_space
 
+    # the shaping-fade loop reads and rewrites reward_config each epoch; forward
+    # it to the wrapped env so the single-game path (games == 1) behaves like the
+    # vector path, which carries reward_config itself.
+    @property
+    def reward_config(self):
+        return self.env.reward_config
+
+    @reward_config.setter
+    def reward_config(self, value):
+        self.env.reward_config = value
+
     def reset(self):
         o, info = self.env.reset()
         return o[None, :], [info]

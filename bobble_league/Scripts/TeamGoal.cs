@@ -12,7 +12,7 @@ public partial class TeamGoal : Area3D
 
     private void OnBodyEntered(Node3D body) {
         if (body.IsInGroup("ball")) {
-            gameManager.SCOREEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE(team);
+            gameManager.Score(team);
         }
     }
 }

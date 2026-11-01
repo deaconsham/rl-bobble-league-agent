@@ -79,9 +79,16 @@ try {
     if ($trainCode -ne 0) { Fail "training exited $trainCode" }
 
     # ---- 5. eval ----
+    # evaluate.py with no --checkpoint picks the highest epoch NUMBER, which may be
+    # a stale pre-Phase-2 checkpoint left in checkpoints/ from an older run. the
+    # smoke run just wrote a fresh one, so eval the newest checkpoint BY TIME.
     Write-Host "== eval $EvalEpisodes games vs chaser =="
+    $freshCkpt = Get-ChildItem (Join-Path $model "checkpoints\ppo_epoch_*.pt") |
+        Sort-Object LastWriteTime | Select-Object -Last 1
+    if (-not $freshCkpt) { Fail "no checkpoint written by training" }
+    Write-Host "  using $($freshCkpt.Name)"
     Push-Location $model
-    & python evaluate.py --opponent chaser --episodes $EvalEpisodes 2>&1 | Tee-Object -FilePath $evalLog
+    & python evaluate.py --opponent chaser --episodes $EvalEpisodes --checkpoint $freshCkpt.FullName 2>&1 | Tee-Object -FilePath $evalLog
     $evalCode = $LASTEXITCODE
     Pop-Location
     if ($evalCode -ne 0) { Fail "evaluate exited $evalCode" }
@@ -94,12 +101,15 @@ finally {
 
 # ---- 6. check the numbers ----
 $trainText = Get-Content $trainLog -Raw
+$evalText = if (Test-Path $evalLog) { Get-Content $evalLog -Raw } else { "" }
 $godotText = if (Test-Path $godotLog) { Get-Content $godotLog -Raw } else { "" }
-$allText = $trainText + "`n" + $godotText
+$allText = $trainText + "`n" + $evalText + "`n" + $godotText
 
-# goals = episodes that ended in a win or loss (someone scored)
-$wins = ([regex]::Matches($trainText, "win vs")).Count
-$losses = ([regex]::Matches($trainText, "loss vs")).Count
+# goals = eval episodes that ended in a win or loss (someone scored). the eval
+# prints "Episode N: win/loss/timeout, ...", one per game. counted from the eval
+# log, not the short training run, which may finish no episode in 2 epochs.
+$wins = ([regex]::Matches($evalText, "Episode \d+: win")).Count
+$losses = ([regex]::Matches($evalText, "Episode \d+: loss")).Count
 $goals = $wins + $losses
 
 # stuck turns: the game logs "did not settle" on a timeout
