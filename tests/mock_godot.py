@@ -55,16 +55,21 @@ class Mock_godot:
         scorer: who scores when a goal lands (1 learner, 2 opponent).
         seed: seeds the fake physics so tests are repeatable.
         protocol_version: write a wrong number here to test old-build refusal.
+        step_delay: seconds to sit on each step before answering, so games can be
+            given different turn lengths for the async-stepping tests.
     """
 
     def __init__(self, path, learner_team=1, play_mode=0, goal_after=3,
-                 scorer=1, seed=0, protocol_version=PROTOCOL_VERSION):
+                 scorer=1, seed=0, protocol_version=PROTOCOL_VERSION, step_delay=0.0):
         self.path = path
         self.learner_team = learner_team
         self.play_mode = play_mode
         self.goal_after = goal_after
         self.scorer = scorer
         self.protocol_version = protocol_version
+        # seconds to sit on a step request before clearing it, so tests can give
+        # games different turn lengths (async stepping collects the fast ones first)
+        self.step_delay = float(step_delay)
         self.rng = np.random.default_rng(seed)
 
         self._hang = False
@@ -167,6 +172,16 @@ class Mock_godot:
                 self._advance(action)
                 self._turn += 1
 
+                # sit on the request so this game's turn takes step_delay seconds;
+                # a test that stops mid-delay (die/hang) leaves the flag set
+                if self.step_delay > 0.0:
+                    waited = 0.0
+                    while waited < self.step_delay and not self._stop and not self._hang:
+                        time.sleep(0.005)
+                        waited += 0.005
+                    if self._stop or self._hang:
+                        continue
+
                 done = self._turn >= self.goal_after
                 reward = 0.0
                 scorer = 0
@@ -207,14 +222,19 @@ class Mock_launcher:
         tmp_dir: folder for the per-game shm files.
         goal_after: turns before each mock game scores (ends an episode).
         hang_games: set of indices whose mock starts hung (to test the timeout).
+        step_delays: optional per-game turn length in seconds, so the async-stepping
+            tests can make some games slower than others.
     """
 
-    def __init__(self, n_games, tmp_dir, goal_after=3, hang_games=None):
+    def __init__(self, n_games, tmp_dir, goal_after=3, hang_games=None, step_delays=None):
         import os as _os
         self.n_games = n_games
         self.tmp_dir = str(tmp_dir)
         self.goal_after = goal_after
         self.hang_games = set(hang_games or [])
+        # per-game turn length in seconds (default 0 = answer as fast as the thread
+        # runs). used by the async-stepping tests to make some games slower.
+        self.step_delays = list(step_delays) if step_delays is not None else [0.0] * n_games
         self.shm_paths = [_os.path.join(self.tmp_dir, f"mmap_{i}.dat") for i in range(n_games)]
         self.games = [None] * n_games
         self.pids = [None] * n_games
@@ -225,7 +245,7 @@ class Mock_launcher:
         if self.games[index] is not None:
             self.games[index].stop()
         game = Mock_godot(self.shm_paths[index], goal_after=self.goal_after,
-                          seed=index)
+                          seed=index, step_delay=self.step_delays[index])
         if index in self.hang_games:
             game.set_hang(True)
         self.games[index] = game

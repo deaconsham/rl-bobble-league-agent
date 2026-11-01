@@ -179,6 +179,14 @@ class Shared_memory_link:
         """Wait until Godot clears the step flag. timeout=None waits forever (human play)."""
         self._wait_flag_clear(self.STEP_REQ_OFFSET, timeout, "finish the turn")
 
+    def step_ready(self):
+        """
+        Non-blocking check: has Godot finished the requested turn? True once it has
+        cleared the step flag. Used by Vector_env to collect each game the moment it
+        is ready instead of waiting on the games in a fixed order.
+        """
+        return self.buf[self.STEP_REQ_OFFSET] == 0
+
     def wait_for_reset(self, timeout=120.0):
         """Wait for Godot to complete the reset. timeout=None waits forever."""
         self._wait_flag_clear(self.RESET_REQ_OFFSET, timeout, "reset")

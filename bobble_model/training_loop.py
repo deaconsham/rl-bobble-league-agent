@@ -897,7 +897,7 @@ if __name__ == '__main__':
     parser.add_argument('--godot', default=None, help='Godot console exe (with --launch)')
     parser.add_argument('--project', default=None, help='bobble_league project path (with --launch)')
     parser.add_argument('--shm-prefix', default=None, help='folder for per-game shm files (with --launch)')
-    parser.add_argument('--timescale', type=int, default=32, help='AI_VS_AI time scale (with --launch)')
+    parser.add_argument('--timescale', type=int, default=48, help='AI_VS_AI time scale (with --launch)')
     # ---- phase 3: PPO fixes (minibatch, KL, entropy, grad clip) ----
     parser.add_argument('--target-kl', type=float, default=0.02,
                         help='per-pass KL early-stop threshold (0.02-0.03)')

@@ -4,6 +4,11 @@ using System;
 public partial class Ball : RigidBody3D {
 	[Export] float speedThreshold;
 
+	// let the game manager set the stop speed from the play mode (training vs human)
+	public void SetStopSpeed(float value) {
+		speedThreshold = value;
+	}
+
 	// Highest the ball's centre may go. Arena walls are 1.39 tall (2.7854 * 0.5 scale)
 	// and the ball radius is 0.5, so the ball clears a wall only above y = 1.89.
 	// 1.2 still allows a small hop but the ball can never get over a wall.

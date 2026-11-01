@@ -30,10 +30,19 @@ public partial class GameManager : Node
     // speeds up AI_VS_AI. physics ticks go up by the same amount so each step is still 1/60 s
     // command line: godot --path bobble_league -- --mode=ai_vs_ai --timescale=32
     [ExportGroup("Training speed")]
-    [Export(PropertyHint.Range, "1,32,1")] public float AIvsAITimeScale = 8f;
+    [Export(PropertyHint.Range, "1,128,1")] public float AIvsAITimeScale = 8f;
 
-    // a turn that never settles gets ended after this many game seconds
-    [Export] public float MaxTurnSeconds = 20f;
+    // a turn that never settles gets ended after this many game seconds.
+    // the longest turn seen in phase 7 was 7.6 s, so 10 s ends only a stuck turn
+    [Export] public float MaxTurnSeconds = 10f;
+
+    // the "stopped" speed below which a body is treated as settled, so a turn can
+    // end. a higher value ends ai_vs_ai turns sooner (worth it for training speed);
+    // human games keep the slower, nicer-feeling value. applied at runtime from the
+    // play mode, so the scene's own value is only a fallback.
+    [Export] public float TrainingStopSpeed = 1.0f;
+    [Export] public float HumanStopSpeed = 0.3f;
+    float StopSpeed => CurrentPlayMode == PlayMode.AI_VS_AI ? TrainingStopSpeed : HumanStopSpeed;
 
     // arena is scaled 0.5: side walls at x = +-10, back of the nets at z = +-18.5
     [Export] public float FieldHalfX = 10f;
@@ -64,8 +73,18 @@ public partial class GameManager : Node
 
     public override void _Ready() {
         ReadCommandLine();
+        ApplyStopSpeed();
         if (CurrentPlayMode == PlayMode.AI_VS_AI && AIvsAITimeScale > 1f) {
             SetTimeScale(AIvsAITimeScale);
+        }
+    }
+
+    // push the mode's stop speed onto the ball and every current player. the ball
+    // is set once; players are respawned each turn, so Spawn re-applies it to each
+    void ApplyStopSpeed() {
+        if (ball is Ball b) b.SetStopSpeed(StopSpeed);
+        foreach (Node node in players.GetChildren()) {
+            if (node is Player p) p.SetStopSpeed(StopSpeed);
         }
     }
 
@@ -270,6 +289,7 @@ public partial class GameManager : Node
             else if (spawn.Team == 2) mesh.SetSurfaceOverrideMaterial(0, TeamB);
             
             player.team = spawn.Team;
+            player.SetStopSpeed(StopSpeed);
             
             players.AddChild(player);
         }

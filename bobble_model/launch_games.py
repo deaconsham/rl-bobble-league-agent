@@ -80,7 +80,7 @@ class Game_launcher:
     """
 
     def __init__(self, n_games, godot_exe=None, project_path=None, shm_prefix=None,
-                 log_dir=None, timescale=32):
+                 log_dir=None, timescale=48):
         self.n_games = n_games
         self.godot_exe = godot_exe or default_godot_exe()
         self.project_path = os.path.abspath(project_path or default_project_path())
@@ -258,7 +258,7 @@ def main():
     parser.add_argument("--project", default=None, help="the bobble_league project folder")
     parser.add_argument("--shm-prefix", default=None, help="folder for the per-game shm files")
     parser.add_argument("--log-dir", default=None)
-    parser.add_argument("--timescale", type=int, default=32)
+    parser.add_argument("--timescale", type=int, default=48)
     args = parser.parse_args()
 
     launcher = Game_launcher(args.games, godot_exe=args.godot, project_path=args.project,

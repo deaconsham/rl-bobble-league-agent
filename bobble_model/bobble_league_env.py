@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import time
 
 import numpy as np
 import gymnasium as gym
@@ -405,10 +406,15 @@ class Vector_env:
         Docstring for step:
 
         Play one turn on all N games with a batched (N, 6) action array. Writes
-        every learner action and opponent action, sets every step flag, then waits
-        for each game in turn. A game that hangs or whose process died is restarted
-        and reported with info['restarted'] = True so the caller can cut its path
-        (truncated) and reset it.
+        every learner action and opponent action and sets every step flag, so the
+        games run in parallel, then collects each game AS SOON AS IT IS READY
+        rather than waiting on them in a fixed index order: a fast game no longer
+        sits idle behind a slow one. A game that hangs or whose process died is
+        restarted and reported with info['restarted'] = True so the caller can cut
+        its path (truncated) and reset it.
+
+        Each game still produces exactly one result per call, written into its own
+        slot i, so a game's path stays in order and no turn is lost or reordered.
 
         Returns stacked (obs, rewards, terminated, truncated, infos), each length N.
         """
@@ -418,16 +424,41 @@ class Vector_env:
         for i in range(self.n_games):
             self._write_turn(i, actions[i])
 
-        # 2) collect each game's result, restarting any that hangs or has died
+        # 2) collect each game the moment its turn is done, in whatever order they
+        # finish. results go into the game's own slot, so slot order is preserved.
         obs = np.zeros((self.n_games, 14), dtype=np.float32)
         rewards = np.zeros(self.n_games, dtype=np.float32)
         terminated = np.zeros(self.n_games, dtype=bool)
         truncated = np.zeros(self.n_games, dtype=bool)
-        infos = []
-        for i in range(self.n_games):
-            o, r, term, trunc, info = self._collect_turn(i)
-            obs[i], rewards[i], terminated[i], truncated[i] = o, r, term, trunc
-            infos.append(info)
+        infos = [None] * self.n_games
+
+        pending = set(range(self.n_games))
+        deadlines = {i: time.time() + self.step_timeout for i in pending}
+        while pending:
+            progressed = False
+            for i in list(pending):
+                ready = False
+                try:
+                    ready = self.bridges[i].step_ready()
+                except (ValueError, OSError):
+                    # a dead process can leave the mmap unreadable; treat as a hang
+                    # so the deadline below restarts it
+                    ready = False
+                if ready:
+                    o, r, term, trunc, info = self._read_turn(i)
+                    obs[i], rewards[i], terminated[i], truncated[i] = o, r, term, trunc
+                    infos[i] = info
+                    pending.discard(i)
+                    progressed = True
+                elif time.time() > deadlines[i]:
+                    o, r, term, trunc, info = self._restart_and_truncate(i, reason="step timed out")
+                    obs[i], rewards[i], terminated[i], truncated[i] = o, r, term, trunc
+                    infos[i] = info
+                    pending.discard(i)
+                    progressed = True
+            if pending and not progressed:
+                # nothing was ready this sweep: sleep a beat so we are not spinning
+                time.sleep(0.001)
         return obs, rewards, terminated, truncated, infos
 
     def _write_turn(self, i, action):
@@ -447,24 +478,20 @@ class Vector_env:
             # a dead process can leave the mmap unwritable; the collect step restarts it
             pass
 
-    def _collect_turn(self, i):
+    def _read_turn(self, i):
         """
-        Docstring for _collect_turn:
+        Docstring for _read_turn:
 
-        Wait for one game's turn and read its result. On a timeout (or a dead
-        process) restart that one game and return a truncated turn so the caller
-        bootstraps the path from the critic.
+        Read one game's finished turn and process it. The caller (step) has already
+        checked the game is ready via step_ready(), so this never waits; it just
+        reads the result, computes the reward and shaping, resets the game on a
+        goal, and returns the per-game (obs, reward, terminated, truncated, info).
 
         When the game's opponent is the live learner (live vs live), also compute
         Team B's reward from ITS mirrored frame and expose the opponent-frame
         transition in info, so the loop can store the opponent side as training
         data. info always carries 'turn_seconds' (how long the turn took to settle).
         """
-        try:
-            self.bridges[i].wait_for_step(self.step_timeout)
-        except TimeoutError:
-            return self._restart_and_truncate(i, reason="step timed out")
-
         self.ep_len[i] += 1
         prev_raw = self._raw_obs[i]
         raw_obs = self.bridges[i].read_observation()

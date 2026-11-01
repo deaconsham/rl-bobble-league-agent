@@ -12,6 +12,11 @@ public partial class Player : RigidBody3D
     [Export] float kickSpeedThreshold;
     [Export] float speedThreshold;
 
+    // let the game manager set the stop speed from the play mode (training vs human)
+    public void SetStopSpeed(float value) {
+        speedThreshold = value;
+    }
+
     [ExportGroup("Visuals")] 
     [Export] float baseWidth;
     [Export] float baseWidthCoef;
