@@ -558,6 +558,7 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
               pfsp=False, shaping_fade=False, shaping_fade_fraction=0.5,
               live_elo_shm=None, live_elo_freq=10, live_elo_games=20,
               live_elo_sigma=0.1, best_path='checkpoints/best.pt',
+              checkpoint_dir=None,
               live_elo_launcher=None, live_elo_index=0, live_elo_step_timeout=20.0,
               live_elo_check_budget=180.0,
               n_passes_v=None, value_norm=False, n_minibatches=None,
@@ -601,6 +602,15 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
 
     device = get_device(device)
     print(f'Using device: {device}')
+
+    # where the periodic ppo_epoch_<N>.pt saves go. Default: the SAME directory as
+    # best.pt (--best-path), so a run writes every save under its own run folder
+    # and two runs cannot overwrite each other's epoch saves (long run 2 wrote
+    # ppo_epoch_*.pt to the shared bobble_model/checkpoints/ while best_p14.pt went
+    # to p14_run/checkpoints/). checkpoint_dir overrides it when set.
+    epoch_ckpt_dir = checkpoint_dir if checkpoint_dir else os.path.dirname(best_path)
+    if not epoch_ckpt_dir:
+        epoch_ckpt_dir = 'checkpoints'
 
     # ---- build the opponents: one per game. self-play games each get their own
     # pool (own 'current' opponent) that SHARES one snapshot list + the live net,
@@ -1049,8 +1059,9 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
 
         # full checkpoint
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
-            os.makedirs('checkpoints', exist_ok=True)
-            save_checkpoint(f'checkpoints/ppo_epoch_{epoch}.pt', ac, pi_optimizer,
+            os.makedirs(epoch_ckpt_dir, exist_ok=True)
+            save_checkpoint(os.path.join(epoch_ckpt_dir, f'ppo_epoch_{epoch}.pt'),
+                            ac, pi_optimizer,
                             vf_optimizer, epoch, lr_step=lr_schedule.step_count,
                             opponent=shared_pool, value_norm=value_norm,
                             reward_scaler=reward_scaler)
@@ -1270,6 +1281,10 @@ if __name__ == '__main__':
                         help='absolute sigma for the noisy scoring pass (step 7); mean move drives best.pt')
     parser.add_argument('--best-path', default='checkpoints/best.pt',
                         help='where best.pt is written / rolled back from')
+    parser.add_argument('--checkpoint-dir', default=None,
+                        help="directory for the periodic ppo_epoch_<N>.pt saves. Default: the "
+                             "same folder as --best-path, so a run keeps all its saves under its "
+                             "own run dir and two runs cannot overwrite each other's epoch saves.")
     parser.add_argument('--live-elo-step-timeout', type=float, default=20.0,
                         help='per-turn timeout (s) for the spare live-Elo game, kept SHORT and '
                              'separate from the training --step-timeout so a wedged spare game is '
@@ -1368,6 +1383,7 @@ if __name__ == '__main__':
               live_elo_games=args.live_elo_games,
               live_elo_sigma=args.live_elo_sigma,
               best_path=args.best_path,
+              checkpoint_dir=args.checkpoint_dir,
               live_elo_launcher=live_elo_launcher,
               live_elo_index=0,
               live_elo_step_timeout=args.live_elo_step_timeout,

@@ -27,6 +27,58 @@ def make_vec(tmp_path, n_games=6, goal_after=3, with_pool=False):
     return env
 
 
+def test_epoch_saves_land_in_run_dir_not_shared(tmp_path, monkeypatch):
+    """T2 (Phase 14 bug B): the periodic ppo_epoch_<N>.pt saves must follow the
+    run's own folder (the directory of --best-path), NOT the shared
+    bobble_model/checkpoints/. In long run 2 best_p14.pt went to
+    p14_run/checkpoints/ while the epoch saves went to the shared dir, so two runs
+    could overwrite each other's saves."""
+    monkeypatch.chdir(tmp_path)
+    run_ckpt = tmp_path / "p14_run" / "checkpoints"
+    best_path = str(run_ckpt / "best_p14.pt")
+
+    vec = make_vec(tmp_path, n_games=6, goal_after=3)
+    ppo_train(vec_env=vec, epochs=2, steps_per_epoch=60, save_freq=1,
+              device="cpu", log_dir=str(tmp_path / "runs"),
+              best_path=best_path, train_pi_iters=3, train_v_iters=3)
+
+    # epoch saves landed in the RUN dir
+    assert os.path.exists(run_ckpt / "ppo_epoch_0.pt")
+    assert os.path.exists(run_ckpt / "ppo_epoch_1.pt")
+    assert load_checkpoint(str(run_ckpt / "ppo_epoch_1.pt"))["epoch"] == 1
+    # and NOT in the shared checkpoints/ dir (it should not even be created here)
+    assert not os.path.exists(tmp_path / "checkpoints" / "ppo_epoch_0.pt")
+
+
+def test_checkpoint_dir_overrides_best_path_dir(tmp_path, monkeypatch):
+    """T2: an explicit --checkpoint-dir sends epoch saves there even when
+    --best-path points elsewhere."""
+    monkeypatch.chdir(tmp_path)
+    best_path = str(tmp_path / "bestonly" / "best.pt")
+    ckpt_dir = tmp_path / "epochs_here"
+
+    vec = make_vec(tmp_path, n_games=6, goal_after=3)
+    ppo_train(vec_env=vec, epochs=1, steps_per_epoch=60, save_freq=1,
+              device="cpu", log_dir=str(tmp_path / "runs"),
+              best_path=best_path, checkpoint_dir=str(ckpt_dir),
+              train_pi_iters=3, train_v_iters=3)
+
+    assert os.path.exists(ckpt_dir / "ppo_epoch_0.pt")
+    assert not os.path.exists(tmp_path / "bestonly" / "ppo_epoch_0.pt")
+
+
+def test_default_best_path_keeps_shared_checkpoints_dir(tmp_path, monkeypatch):
+    """T2: with the default best_path ('checkpoints/best.pt') epoch saves still
+    land in checkpoints/ - the fix must not change the default-path behaviour the
+    other mock tests rely on."""
+    monkeypatch.chdir(tmp_path)
+    vec = make_vec(tmp_path, n_games=6, goal_after=3)
+    ppo_train(vec_env=vec, epochs=1, steps_per_epoch=60, save_freq=1,
+              device="cpu", log_dir=str(tmp_path / "runs"),
+              train_pi_iters=3, train_v_iters=3)
+    assert os.path.exists("checkpoints/ppo_epoch_0.pt")
+
+
 def test_two_epochs_then_resume(tmp_path, monkeypatch):
     # checkpoints land under tmp_path/checkpoints
     monkeypatch.chdir(tmp_path)

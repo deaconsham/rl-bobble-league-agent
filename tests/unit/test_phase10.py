@@ -171,6 +171,69 @@ def test_beats_best_gate():
     assert beats_best(0, 0, 0) is False       # no games
 
 
+def test_loses_head_to_head_only_on_a_clear_loss():
+    from live_elo import loses_head_to_head
+    # clear loss: score < 1 - 0.55 = 0.45
+    assert loses_head_to_head(8, 12, 0) is True      # 0.40 < 0.45
+    assert loses_head_to_head(4, 16, 0) is True      # 0.20 < 0.45
+    # level or near-level is NOT a clear loss (so it does not veto a margin win)
+    assert loses_head_to_head(10, 10, 0) is False    # 0.50
+    assert loses_head_to_head(9, 11, 0) is False     # 0.45 not strictly below 0.45
+    assert loses_head_to_head(12, 8, 0) is False     # 0.60, a win
+    # no games (wedged / empty h2h) is no evidence, not a loss
+    assert loses_head_to_head(0, 0, 0) is False
+    assert loses_head_to_head(0, 0, 20) is False     # all draws = 0.50
+
+
+def test_margin_win_at_the_boundary_does_not_promote():
+    # exactly +margin is NOT strictly past the margin; just over it is.
+    t = Best_tracker()                              # margin 25
+    t.consider(epoch=0, elo=1000.0)                 # best = 1000
+    d_eq = t.consider(epoch=10, elo=1025.0, head_to_head_record=(12, 7, 1))
+    assert d_eq["became_best"] is False             # 1025 == 1000 + 25, not strictly past
+    assert t.best_elo == pytest.approx(1000.0)
+    d_over = t.consider(epoch=20, elo=1025.1, head_to_head_record=(12, 7, 1))
+    assert d_over["became_best"] is True            # a hair past the margin promotes
+    assert t.best_elo == pytest.approx(1025.1)
+
+
+def test_margin_win_with_no_h2h_record_still_promotes():
+    # the Phase 14 fix: a clear margin win must promote even when no head-to-head
+    # was played (h2h None), where the old gate silently declined.
+    t = Best_tracker()
+    t.consider(epoch=0, elo=961.5)
+    d = t.consider(epoch=100, elo=1203.1, head_to_head_record=None)
+    assert d["became_best"] is True
+    assert t.best_elo == pytest.approx(1203.1)
+
+
+def test_long_run_2_sequence_now_promotes():
+    # the exact logged mean-Elo sequence from p14_run (best froze at epoch 0 for
+    # all 200 epochs). With the gate fixed, feeding a level h2h whenever the save
+    # is ahead (what a noisy 20-game h2h looks like), the big jumps now promote.
+    seq = [
+        (0, 961.5), (10, 951.4), (20, 980.5), (30, 979.2), (40, 957.6),
+        (50, 969.4), (60, 973.7), (70, 962.8), (80, 933.3), (90, 946.8),
+        (100, 1203.1), (110, 961.7), (120, 933.3), (130, 1102.2), (140, 980.0),
+        (150, 999.4), (160, 955.2), (170, 962.7), (180, 960.8), (190, 947.4),
+        (199, 1025.5),
+    ]
+    t = Best_tracker()
+    promotions = []
+    for epoch, elo in seq:
+        h2h = (10, 10, 0) if (t.best_elo is not None and elo > t.best_elo) else None
+        d = t.consider(epoch, elo, head_to_head_record=h2h)
+        if d["became_best"]:
+            promotions.append(epoch)
+    # epoch 0 (first best), 100 (1203, clears 961.5+25); then only a NEW best past
+    # the running best + margin promotes again (130/199 are below the 1203 best).
+    assert 0 in promotions and 100 in promotions
+    assert t.best_elo == pytest.approx(1203.1)
+    assert t.best_epoch == 100
+    # and crucially, best did NOT stay frozen at the epoch-0 961.5
+    assert t.best_elo > 961.5
+
+
 def test_first_check_becomes_best_no_h2h():
     t = Best_tracker()
     d = t.consider(epoch=0, elo=900.0, head_to_head_record=None)
@@ -178,12 +241,25 @@ def test_first_check_becomes_best_no_h2h():
     assert t.best_elo == pytest.approx(900.0)
 
 
-def test_higher_elo_but_loses_h2h_does_not_become_best():
+def test_clear_h2h_loss_blocks_even_past_the_margin():
+    # a save that clears the 25-Elo margin on the anchor scale but CLEARLY loses
+    # the head-to-head (score < 0.45) is a false positive and must not promote.
     t = Best_tracker()
     t.consider(epoch=0, elo=900.0)                  # best = 900
-    d = t.consider(epoch=10, elo=950.0, head_to_head_record=(10, 10, 0))  # 50% <= 55%
+    d = t.consider(epoch=10, elo=1000.0, head_to_head_record=(4, 16, 0))  # 0.20 < 0.45
     assert d["became_best"] is False
     assert t.best_elo == pytest.approx(900.0)       # unchanged
+
+
+def test_level_h2h_does_not_veto_a_clear_margin_winner():
+    # the long-run-2 bug: a save far past the margin but only LEVEL in the noisy
+    # 20-game h2h (score 0.5) used to be vetoed by the > 0.55 gate, so best.pt
+    # never moved. A level (or near-level) h2h must NOT block a clear margin win.
+    t = Best_tracker()
+    t.consider(epoch=0, elo=961.5)                  # best = 961.5 (epoch 0, long run 2)
+    d = t.consider(epoch=100, elo=1203.1, head_to_head_record=(10, 10, 0))  # 0.50
+    assert d["became_best"] is True
+    assert t.best_elo == pytest.approx(1203.1)
 
 
 def test_higher_elo_and_wins_h2h_becomes_best():

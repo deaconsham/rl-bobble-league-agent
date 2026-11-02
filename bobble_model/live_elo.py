@@ -7,9 +7,10 @@ training runs: every few epochs it plays the current net against the fixed chase
 and defender anchors on one spare Godot game, turns the win rates into an Elo
 number on the SAME anchored scale league_eval uses, and logs it to TensorBoard.
 
-It also keeps best.pt (a save becomes best only if its live Elo is the highest so
-far AND it beats the old best head-to-head), and rolls back to best.pt after a
-drop of more than ~100 Elo that holds for two checks.
+It also keeps best.pt (a save becomes best when its live Elo clears the current
+best by more than the noise margin, unless a head-to-head shows it is clearly the
+weaker net one-on-one), and rolls back to best.pt after a drop of more than ~100
+Elo that holds for two checks.
 
 Two pieces, kept apart so the maths is unit-testable without Godot:
   - live_elo_rating: pure maths. Win rates vs the anchors -> one Elo number.
@@ -207,6 +208,26 @@ def beats_best(wins, losses, draws, threshold=BEST_GATE_WIN_RATE):
     return score > threshold
 
 
+def loses_head_to_head(wins, losses, draws, threshold=BEST_GATE_WIN_RATE):
+    """True when the challenger CLEARLY lost the head-to-head: its score rate (a
+    draw is half a win) is strictly below 1 - threshold. No games -> False (an
+    empty / wedged h2h is not a clear loss, it is no evidence).
+
+    This is deliberately NOT the negation of beats_best. The best-gate used to
+    require beats_best (> 0.55) on a noisy 20-game h2h, which vetoed a challenger
+    that was far ahead on anchor Elo but only level in the head-to-head (long run
+    2: best.pt froze at epoch 0 for all 200 epochs while epoch 100 posted +240
+    Elo). The 25-Elo margin is already the noise guard, so the h2h's only remaining
+    job is to catch a save that is ahead on the anchor scale yet CLEARLY behind the
+    current best one-on-one (score < 0.45): that, and only that, blocks promotion.
+    A level or wedged h2h no longer vetoes a clear margin winner."""
+    total = int(wins) + int(losses) + int(draws)
+    if total <= 0:
+        return False
+    score = (int(wins) + 0.5 * int(draws)) / total
+    return score < (1.0 - threshold)
+
+
 class Best_tracker:
     """
     Docstring for Best_tracker class:
@@ -214,9 +235,14 @@ class Best_tracker:
     Holds the best-so-far save and decides, from each live check, whether the new
     save becomes best and whether to roll back.
 
-    best rule (step 6): a save becomes best only if its live Elo is the highest
-    seen so far AND it beats the current best in a head-to-head (>55%). The first
-    save checked becomes best with no head-to-head (nothing to beat yet).
+    best rule (step 6; revised): a save becomes best when its live Elo clears the
+    current best by more than best_margin (the ~25-Elo noise guard). A head-to-head
+    vs the current best is folded in only as a veto on a FALSE positive: if the
+    challenger clears the margin on the anchor scale but clearly LOSES the h2h
+    (score < 1 - gate, i.e. < 0.45), it is not promoted. A level, winning, missing
+    or wedged h2h does NOT block a clear margin winner - requiring it to also WIN
+    the h2h (> 0.55) on a noisy 20-game match was what froze best.pt at epoch 0 for
+    all 200 epochs of long run 2. The first save checked becomes best outright.
 
     rollback rule (step 6): once there is a best, a check whose live Elo is more
     than ROLLBACK_ELO_DROP below the best's Elo is a "down" check. After
@@ -233,9 +259,9 @@ class Best_tracker:
         self.elo_drop = float(elo_drop)
         self.rollback_checks = int(rollback_checks)
         self.gate = float(gate)
-        # Elo margin a challenger must clear ABOVE the current best (on top of the
-        # head-to-head gate) to replace it, so live-gate noise cannot promote a
-        # weaker save (Phase 11 gate-noise finding).
+        # Elo margin a challenger must clear ABOVE the current best to replace it,
+        # the authoritative noise guard (Phase 11 gate-noise finding). The h2h is
+        # folded in only to veto a clear one-on-one loser, not as a second gate.
         self.best_margin = float(best_margin)
         self.best_elo = None     # Elo of the current best
         self.best_epoch = None   # epoch the current best was saved at
@@ -262,17 +288,28 @@ class Best_tracker:
 
         became_best = False
         reason = ""
-        # a challenger must clear the best by MORE than best_margin (noise guard)
-        # AND win the head-to-head, before it replaces best.pt.
-        if elo > self.best_elo + self.best_margin and head_to_head_record is not None:
-            w, l, d = head_to_head_record
-            if beats_best(w, l, d, self.gate):
+        # the 25-Elo margin IS the noise guard: a challenger that clears the best
+        # by MORE than best_margin is promoted. The head-to-head is no longer a
+        # hard veto (it used to require > 55%, which a noisy 20-game h2h fails even
+        # when the challenger is far ahead on anchor Elo - long run 2 froze best.pt
+        # at epoch 0 for all 200 epochs this way). It now only blocks a save that
+        # clears the margin but is CLEARLY behind one-on-one (score < 0.45); a
+        # level, winning, missing or wedged h2h lets a clear margin winner through.
+        if elo > self.best_elo + self.best_margin:
+            h2h_clear_loss = (head_to_head_record is not None
+                              and loses_head_to_head(*head_to_head_record, self.gate))
+            if not h2h_clear_loss:
                 old = self.best_elo
                 self.best_elo = float(elo)
                 self.best_epoch = int(epoch)
                 became_best = True
-                reason = (f"new best at epoch {epoch}: elo {elo:.1f} > {old:.1f}+{self.best_margin:.0f} "
-                          f"and h2h W{w} L{l} D{d} beats best")
+                if head_to_head_record is not None:
+                    w, l, d = head_to_head_record
+                    reason = (f"new best at epoch {epoch}: elo {elo:.1f} > {old:.1f}"
+                              f"+{self.best_margin:.0f} and h2h W{w} L{l} D{d} not a clear loss")
+                else:
+                    reason = (f"new best at epoch {epoch}: elo {elo:.1f} > {old:.1f}"
+                              f"+{self.best_margin:.0f} (margin cleared, no h2h)")
 
         # rollback accounting: a check far below the best is a "down" check.
         if elo < self.best_elo - self.elo_drop:
