@@ -11,6 +11,85 @@ from torch.distributions import Normal, Independent
 # it after loading an init checkpoint so an old save's wide spread is not reused.
 INIT_LOG_STD = -1.6
 
+
+class Running_mean_std:
+    """
+    Docstring for Running_mean_std class:
+
+    Running mean and variance of a scalar stream, updated in one batch at a time
+    with Welford's parallel (Chan et al.) formula so it stays stable over a whole
+    run. Phase 11, step 1: the critic is trained on value targets normalized by
+    these running stats (37 PPO details, https://iclr-blog-track.github.io/2022/
+    03/25/ppo-implementation-details/; MAPPO found value normalization "often
+    helps and never hurts", https://bair.berkeley.edu/blog/2021/07/14/mappo/).
+
+    The stats are saved in every checkpoint under their own key, so a resumed run
+    normalizes on the same scale. A save written before this phase has no stats
+    key; load_state on a fresh normalizer then just leaves it unfit (count 0,
+    mean 0, var 1), which is the identity transform, so an old save still loads
+    and trains, it only re-learns the scale.
+    """
+
+    def __init__(self, epsilon=1e-4):
+        # start count at a tiny epsilon (not 0) so the first update's parallel
+        # merge has a defined denominator; mean 0 / var 1 is the identity.
+        self.mean = 0.0
+        self.var = 1.0
+        self.count = float(epsilon)
+
+    def update(self, x):
+        """Fold a batch of scalars in (numpy array or torch tensor)."""
+        if isinstance(x, torch.Tensor):
+            x = x.detach().cpu().numpy()
+        x = np.asarray(x, dtype=np.float64).ravel()
+        if x.size == 0:
+            return
+        batch_mean = float(x.mean())
+        batch_var = float(x.var())
+        batch_count = float(x.size)
+
+        delta = batch_mean - self.mean
+        total = self.count + batch_count
+        new_mean = self.mean + delta * batch_count / total
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m2 = m_a + m_b + delta * delta * self.count * batch_count / total
+        self.mean = new_mean
+        self.var = m2 / total
+        self.count = total
+
+    @property
+    def std(self):
+        """Standard deviation with a small floor so normalize never divides by 0."""
+        return float(np.sqrt(self.var) + 1e-8)
+
+    def normalize(self, x):
+        """(x - mean) / std. Takes/returns a torch tensor or a numpy array."""
+        if isinstance(x, torch.Tensor):
+            return (x - self.mean) / self.std
+        return (np.asarray(x) - self.mean) / self.std
+
+    def denormalize(self, x):
+        """std * x + mean: turn a normalized value back to the raw scale (so
+        explained variance and logging stay on the real return scale)."""
+        if isinstance(x, torch.Tensor):
+            return x * self.std + self.mean
+        return np.asarray(x) * self.std + self.mean
+
+    def state(self):
+        """Plain dict for the checkpoint."""
+        return {"mean": self.mean, "var": self.var, "count": self.count}
+
+    def load_state(self, state):
+        """Restore from a checkpoint dict. A None / empty state leaves the fresh
+        identity stats in place (an old save without value-norm stats)."""
+        if not state:
+            return
+        self.mean = float(state.get("mean", 0.0))
+        self.var = float(state.get("var", 1.0))
+        self.count = float(state.get("count", 1e-4))
+
+
 def ortho_init(layer, gain):
     """
     Docstring for ortho_init
@@ -23,7 +102,8 @@ def ortho_init(layer, gain):
     nn.init.zeros_(layer.bias)
     return layer
 
-def neural_network(sizes, activation = nn.Tanh, hidden_gain=None, out_gain=None):
+def neural_network(sizes, activation = nn.Tanh, hidden_gain=None, out_gain=None,
+                   use_layernorm=False):
     """
     Docstring for neural_network
 
@@ -33,6 +113,12 @@ def neural_network(sizes, activation = nn.Tanh, hidden_gain=None, out_gain=None)
     :param activation: Activation function used between layers
     :param hidden_gain: orthogonal gain for the hidden Linear layers (None skips init)
     :param out_gain: orthogonal gain for the final Linear layer (None skips init)
+    :param use_layernorm: add a LayerNorm after each hidden Linear (before the
+        activation). Phase 11, step 5: LayerNorm helps a net keep learning while
+        its targets shift, which self-play does all the time (Lyle et al. 2024,
+        https://arxiv.org/abs/2402.18762). This changes the saved weight shape, so
+        old saves and warm_start.pt no longer load; it is only turned on when a run
+        needs it (EV still under 0.4 after steps 1-4).
     :return: A neural network
     """
     layers = []
@@ -48,6 +134,9 @@ def neural_network(sizes, activation = nn.Tanh, hidden_gain=None, out_gain=None)
                 ortho_init(linear, hidden_gain)
         layers.append(linear)
         if not is_last:
+            # LayerNorm sits between the hidden Linear and its activation
+            if use_layernorm:
+                layers.append(nn.LayerNorm(sizes[i + 1]))
             layers.append(activation())
     return nn.Sequential(*layers)
 
@@ -64,17 +153,21 @@ class Actor_critic_neural_network(nn.Module):
         :param act_dim: Size of the action vector
         :param hidden: List defining hidden layers in neural network
         """
-    def __init__(self, obs_dim=14, act_dim=6, hidden=[256, 256]):
+    def __init__(self, obs_dim=14, act_dim=6, hidden=[256, 256], use_layernorm=False):
         super().__init__()
 
         # orthogonal init (PPO default): sqrt(2) on the hidden layers, a small 0.01
         # on the policy head so the first actions are near zero (gentle start), and
-        # 1.0 on the value head.
+        # 1.0 on the value head. use_layernorm adds a LayerNorm after each hidden
+        # layer (Phase 11, step 5) and changes the saved weight shape.
+        self.use_layernorm = use_layernorm
         root_two = float(np.sqrt(2))
         self.pi_net = neural_network([obs_dim] + hidden + [act_dim],
-                                     hidden_gain=root_two, out_gain=0.01)
+                                     hidden_gain=root_two, out_gain=0.01,
+                                     use_layernorm=use_layernorm)
         self.v_net = neural_network([obs_dim] + hidden + [1],
-                                    hidden_gain=root_two, out_gain=1.0)
+                                    hidden_gain=root_two, out_gain=1.0,
+                                    use_layernorm=use_layernorm)
         self.log_std = nn.Parameter(INIT_LOG_STD * torch.ones(act_dim))
     
     def forward(self, obs):

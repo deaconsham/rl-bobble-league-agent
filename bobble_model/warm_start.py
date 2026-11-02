@@ -227,13 +227,17 @@ def save_warm_checkpoint(path, ac, pi_lr=3e-4, vf_lr=1e-3):
 
 def warm_start(vec_env, out_path, n_turns=12000, clone_epochs=30, gamma=0.99,
                lam=0.97, max_ep_len=1000, device="cpu", chaser_kwargs=None,
-               verbose=True):
+               verbose=True, use_layernorm=False):
     """
     Docstring for warm_start:
 
     End to end: record chaser demos over the given Vector_env, clone them into a
     fresh network, reset log_std, and save the warm checkpoint. Returns
     (ac, demos, history) for inspection and testing.
+
+    use_layernorm builds the network with LayerNorm on its hidden layers (Phase 11,
+    step 5). A run that turns LayerNorm on must warm start from a checkpoint rebuilt
+    with it on, because LayerNorm changes the saved weight shape.
 
     The demo chaser (the one driving the LEARNER slot, whose actions become the
     clone target) defaults to DETERMINISTIC: noise=0 and kickoff_noise=0. MSE
@@ -256,7 +260,8 @@ def warm_start(vec_env, out_path, n_turns=12000, clone_epochs=30, gamma=0.99,
 
     obs_dim = vec_env.observation_space.shape[0]
     act_dim = vec_env.action_space.shape[0]
-    ac = Actor_critic_neural_network(obs_dim=obs_dim, act_dim=act_dim)
+    ac = Actor_critic_neural_network(obs_dim=obs_dim, act_dim=act_dim,
+                                     use_layernorm=use_layernorm)
     history = behaviour_clone(ac, demos, epochs=clone_epochs, device=device, verbose=verbose)
 
     save_warm_checkpoint(out_path, ac)
@@ -288,12 +293,16 @@ def main():
     parser.add_argument("--random-init", default=None, metavar="PATH",
                         help="save a FRESH random-init net to PATH and exit (the T5 "
                              "baseline to compare the warm start against); no Godot")
+    parser.add_argument("--use-layernorm", action="store_true",
+                        help="build the net with LayerNorm (Phase 11 step 5); the run that "
+                             "uses it must also pass --use-layernorm")
     args = parser.parse_args()
 
     # the T5 baseline: an untrained net saved in the same checkpoint format, so
     # evaluate.py can play it vs the chaser the same way. no games needed.
     if args.random_init:
-        ac = Actor_critic_neural_network(obs_dim=14, act_dim=6)
+        ac = Actor_critic_neural_network(obs_dim=14, act_dim=6,
+                                         use_layernorm=args.use_layernorm)
         save_warm_checkpoint(args.random_init, ac)
         print(f"random-init baseline saved to {args.random_init}")
         return
@@ -307,7 +316,8 @@ def main():
                          step_timeout=args.step_timeout, auto_launch=True)
     try:
         warm_start(vec_env, args.out, n_turns=args.turns, clone_epochs=args.clone_epochs,
-                   max_ep_len=args.max_ep_len, device=args.device)
+                   max_ep_len=args.max_ep_len, device=args.device,
+                   use_layernorm=args.use_layernorm)
     finally:
         vec_env.close()
 

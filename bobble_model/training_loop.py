@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
-from neural_network import Actor_critic_neural_network, INIT_LOG_STD
+from neural_network import Actor_critic_neural_network, INIT_LOG_STD, Running_mean_std
 from shared_memory_link import Shared_memory_link
 
 # the action meaning is tied to the wire protocol, so tag checkpoints with the
@@ -253,24 +253,29 @@ def compute_loss_pi(ac, data, clip_ratio=0.2):
     return loss_pi, pi_info
 
 
-def compute_loss_v(ac, data):
+def compute_loss_v(ac, data, value_norm=None):
     """
     Docstring for compute_loss_v:
 
-    Compute value function loss
-    
-    MSE between predicted values and actual returns:
-    value_loss = (V(s) - R)^2
-    
-    Where R is the actual discounted return we got
+    Compute value function loss.
+
+    MSE between the critic's prediction and the actual returns. Phase 11, step 1:
+    when a `value_norm` (Running_mean_std) is given, the TARGET returns are
+    normalized by the running stats before the MSE, so the critic learns on a
+    unit-scale target that does not swing as the reward magnitude drifts. The
+    critic's raw output is compared against the normalized return, so the critic
+    itself predicts the normalized value; callers that need the raw-scale value
+    (explained variance, bootstrapping) denormalize it. With value_norm None this
+    is the plain raw-scale MSE as before.
     """
     obs, ret = data['obs'], data['ret']
-    
+
     # Get value estimate from critic
     _, value = ac(obs)
-    
+
+    target = value_norm.normalize(ret) if value_norm is not None else ret
     # MSE loss
-    return ((value - ret) ** 2).mean()
+    return ((value - target) ** 2).mean()
 
 
 def explained_variance(values, returns):
@@ -398,16 +403,19 @@ def set_rng_state(state):
 
 
 def save_checkpoint(path, ac, pi_optimizer, vf_optimizer, epoch, lr_step,
-                    opponent=None, save_rng=True):
+                    opponent=None, save_rng=True, value_norm=None):
     """
     Docstring for save_checkpoint:
 
     Write a FULL checkpoint so a crashed run resumes exactly: the network weights,
     both optimizer states, the LR schedule step, the epoch, the self-play pool
-    (snapshot weights + win rates) when the opponent is a pool, and the RNG state.
+    (snapshot weights + win rates) when the opponent is a pool, the RNG state, and
+    the value-normalizer stats (Phase 11, step 1) when one is given.
 
     'model' stays a plain state_dict at the top so load_state_dict in opponents.py
     (which unwraps {'model': ...}) keeps working for eval and as a frozen opponent.
+    The value-norm stats live under their OWN top-level key, not inside 'model', so
+    the eval loader never sees them and a save without them still loads.
     """
     from opponents import SelfPlayPool
 
@@ -424,6 +432,8 @@ def save_checkpoint(path, ac, pi_optimizer, vf_optimizer, epoch, lr_step,
     }
     if isinstance(opponent, SelfPlayPool):
         ckpt['pool'] = opponent.state()
+    if value_norm is not None:
+        ckpt['value_norm'] = value_norm.state()
     if save_rng:
         ckpt['rng'] = rng_state()
     tmp = f'{path}.tmp'
@@ -526,7 +536,10 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
               minibatch_size=256, n_passes=10, ent_coef=0.0, max_grad_norm=0.5,
               pfsp=False, shaping_fade=False, shaping_fade_fraction=0.5,
               live_elo_shm=None, live_elo_freq=10, live_elo_games=20,
-              live_elo_sigma=0.1, best_path='checkpoints/best.pt'):
+              live_elo_sigma=0.1, best_path='checkpoints/best.pt',
+              n_passes_v=None, value_norm=False, n_minibatches=None,
+              kl_warm_start=None, kl_coef=0.0, kl_fade_fraction=0.5,
+              use_layernorm=False, weight_decay=0.0):
     """
     Docstring for ppo_train:
 
@@ -576,7 +589,7 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     else:
         n_games = games
         if opponent == 'self':
-            shared_pool = SelfPlayPool(pfsp=pfsp)
+            shared_pool = SelfPlayPool(pfsp=pfsp, use_layernorm=use_layernorm)
             opponents = shared_pool.make_siblings(n_games)
         else:
             shared_pool = None
@@ -599,11 +612,25 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     act_dim = env.action_space.shape[0]
     writer = SummaryWriter(log_dir=log_dir)
 
+    # ---- Phase 11 knobs ----
+    # value_norm arrives as a bool flag; turn it into a Running_mean_std object (or
+    # None) so the rest of the loop can test `if value_norm is not None`.
+    value_norm = Running_mean_std() if value_norm else None
+    # critic passes default to the policy passes when not split (Phase 11, step 2).
+    if n_passes_v is None:
+        n_passes_v = n_passes
+
     # ---- model + optimizers ----
+    # use_layernorm changes the saved weight shape (Phase 11, step 5), so a run
+    # with it on must start from a warm start rebuilt with it on.
+    ac_kwargs = dict(ac_kwargs)
+    ac_kwargs.setdefault('use_layernorm', use_layernorm)
     ac = actor_critic(obs_dim=obs_dim, act_dim=act_dim, **ac_kwargs)
     ac.to(device)
-    pi_optimizer = Adam(list(ac.pi_net.parameters()) + [ac.log_std], lr=pi_lr)
-    vf_optimizer = Adam(ac.v_net.parameters(), lr=vf_lr)
+    # weight_decay (~1e-4) is Phase 11 step 5's small decay, paired with LayerNorm.
+    pi_optimizer = Adam(list(ac.pi_net.parameters()) + [ac.log_std], lr=pi_lr,
+                        weight_decay=weight_decay)
+    vf_optimizer = Adam(ac.v_net.parameters(), lr=vf_lr, weight_decay=weight_decay)
 
     # self-play: hand the live net to the pool so its 'live' slot can play the
     # opponent side (and its turns become training data in live-vs-live games)
@@ -621,6 +648,11 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
             vf_optimizer.load_state_dict(ckpt['vf_optimizer'])
         if shared_pool is not None and ckpt.get('pool'):
             shared_pool.load_state(ckpt['pool'])
+        # value-norm stats (Phase 11, step 1): an old save has no 'value_norm'
+        # key; load_state then leaves the fresh identity stats, so the run keeps
+        # going and just re-learns the scale instead of crashing.
+        if value_norm is not None:
+            value_norm.load_state(ckpt.get('value_norm'))
         set_rng_state(ckpt.get('rng'))
         start_epoch = int(ckpt.get('epoch', -1)) + 1
         resumed_lr_step = int(ckpt.get('lr_step', start_epoch))
@@ -643,6 +675,23 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     # where it left off instead of snapping back to the full LR.
     lr_schedule = Linear_lr_schedule([pi_optimizer, vf_optimizer], [pi_lr, vf_lr],
                                      total=epochs, step=resumed_lr_step)
+
+    # ---- KL-to-warm-start teacher (Phase 11, step 4) ----
+    # a frozen copy of warm_start.pt whose MEAN the learner is pulled toward early
+    # in the run, fading to 0 over the first half (Kickstarting). matching only the
+    # mean (the teacher is given the learner's own sigma in the loss) keeps the
+    # teacher's wide spread from pulling log_std back up and undoing Phase 10.
+    kl_teacher = None
+    if kl_warm_start:
+        from opponents import load_state_dict
+        kl_teacher = actor_critic(obs_dim=obs_dim, act_dim=act_dim, **ac_kwargs)
+        kl_teacher.load_state_dict(load_state_dict(kl_warm_start))
+        kl_teacher.to(device)
+        kl_teacher.eval()
+        for p in kl_teacher.parameters():
+            p.requires_grad_(False)
+        print(f'KL teacher loaded from {kl_warm_start} '
+              f'(coef {kl_coef}, fades over first {kl_fade_fraction:.0%} of the run)')
 
     # ---- per-game buffers: steps split evenly, GAE paths stay separate ----
     per_game = max(1, steps_per_epoch // n_games)
@@ -702,7 +751,8 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         decision = best_tracker.consider(epoch, elo_mean, head_to_head_record=h2h)
         if decision['became_best']:
             save_checkpoint(best_path, ac, pi_optimizer, vf_optimizer, epoch,
-                            lr_step=lr_schedule.step_count, opponent=shared_pool)
+                            lr_step=lr_schedule.step_count, opponent=shared_pool,
+                            value_norm=value_norm)
         if decision['rollback']:
             from opponents import load_state_dict as _load
             ac.load_state_dict(_load(best_path))
@@ -744,7 +794,11 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         for t in range(per_game):
             a, v, logp = ac.step(o)                 # one batched call over all games
             a_np = a.cpu().numpy().reshape(n_games, act_dim)
+            # the critic predicts the NORMALIZED value when value_norm is on, so
+            # bring it back to the raw reward scale before it feeds GAE / returns.
             v_np = v.cpu().numpy().reshape(n_games)
+            if value_norm is not None:
+                v_np = value_norm.denormalize(v_np)
             logp_np = logp.cpu().numpy().reshape(n_games)
 
             next_o, r, terminated, truncated, step_infos = env.step(a_np)
@@ -757,11 +811,15 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
                 ts = step_infos[g].get('turn_seconds')
                 if ts is not None and not step_infos[g].get('restarted'):
                     turn_seconds_all.append(float(ts))
-                # live vs live: store Team B's turn (already in the opponent frame)
+                # live vs live: store Team B's turn (already in the opponent frame).
+                # its stored value also comes from the critic, so denormalize it too.
                 opp = step_infos[g].get('opponent')
                 if opp is not None:
+                    opp_val = opp['val']
+                    if value_norm is not None:
+                        opp_val = float(value_norm.denormalize(opp_val))
                     opp_buffers[g].store(opp['obs'], opp['act'], opp['reward'],
-                                         opp['val'], opp['logp'])
+                                         opp_val, opp['logp'])
                     opp_turns_stored += 1
 
             o = next_o
@@ -784,6 +842,10 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
                         # the opponent-frame next obs (the same net, mirrored view)
                         _, opp_v_last, _ = ac.step(opponent_view(o[g]))
                         opp_last_val = opp_v_last.item()
+                        # both are critic outputs: denormalize to the raw scale GAE uses
+                        if value_norm is not None:
+                            last_val = float(value_norm.denormalize(last_val))
+                            opp_last_val = float(value_norm.denormalize(opp_last_val))
                     buffers[g].finish_path(last_val)
                     opp_buffers[g].finish_path(opp_last_val)
                     if term or trunc:
@@ -799,10 +861,22 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         # normalize advantages over the whole batch, update
         opp_data = [buf.get(device=device) for buf in opp_buffers if len(buf) > 0]
         data = join_and_normalize(buffers, device=device, extra_data=opp_data)
+
+        # KL-to-warm-start weight for this epoch: starts at kl_coef and fades
+        # linearly to 0 over the first `kl_fade_fraction` of the run, then stays 0
+        # (Kickstarting, https://arxiv.org/abs/1803.03835). Zero when no teacher.
+        kl_weight = 0.0
+        if kl_teacher is not None and kl_coef > 0.0:
+            fade_epochs = max(1, int(epochs * kl_fade_fraction))
+            kl_weight = kl_coef * max(0.0, 1.0 - epoch / fade_epochs)
+
         update_info = update_from_data(ac, data, pi_optimizer, vf_optimizer,
                                        train_pi_iters, train_v_iters, target_kl, clip_ratio,
                                        minibatch_size=minibatch_size, n_passes=n_passes,
-                                       ent_coef=ent_coef, max_grad_norm=max_grad_norm)
+                                       ent_coef=ent_coef, max_grad_norm=max_grad_norm,
+                                       n_passes_v=n_passes_v, value_norm=value_norm,
+                                       kl_teacher=kl_teacher, kl_coef=kl_weight,
+                                       n_minibatches=n_minibatches)
         # LR before stepping the schedule is the LR this update actually ran at
         cur_lr = lr_schedule.current_lrs()[0]
 
@@ -820,6 +894,12 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         writer.add_scalar('Training/Clip_Fraction', update_info['ClipFrac'], epoch)
         writer.add_scalar('Training/Explained_Variance', update_info['ExplainedVariance'], epoch)
         writer.add_scalar('Training/Passes_Run', update_info['PassesRun'], epoch)
+        writer.add_scalar('Training/Critic_Passes_Run', update_info['CriticPassesRun'], epoch)
+        writer.add_scalar('Training/KL_Teacher_Weight', kl_weight, epoch)
+        writer.add_scalar('Training/KL_To_Teacher', update_info['KLTeacher'], epoch)
+        if value_norm is not None:
+            writer.add_scalar('Training/Value_Norm_Std', value_norm.std, epoch)
+            writer.add_scalar('Training/Value_Norm_Mean', value_norm.mean, epoch)
         writer.add_scalar('Training/Learning_Rate', cur_lr, epoch)
         writer.add_scalar('Training/Restarts', restarts, epoch)
         writer.add_scalar('Data/Opponent_Turns_Stored', opp_turns_stored, epoch)
@@ -861,7 +941,7 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
             os.makedirs('checkpoints', exist_ok=True)
             save_checkpoint(f'checkpoints/ppo_epoch_{epoch}.pt', ac, pi_optimizer,
                             vf_optimizer, epoch, lr_step=lr_schedule.step_count,
-                            opponent=shared_pool)
+                            opponent=shared_pool, value_norm=value_norm)
             print(f'Model saved at epoch {epoch}')
 
         # live Elo + best.pt + roll-back, on its own cadence (Phase 10, steps 5-7)
@@ -875,44 +955,94 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     return ac
 
 
+def kl_to_teacher(ac, teacher, obs):
+    """
+    Docstring for kl_to_teacher:
+
+    KL from the frozen teacher's policy to the learner's, matching the MEAN only
+    (Phase 11, step 4). Both policies are diagonal Gaussians; we give the teacher
+    the LEARNER's own sigma so the spread drops out of the KL and only the means
+    are compared. For a shared sigma the KL reduces to
+    0.5 * sum((mu_learner - mu_teacher)^2 / sigma^2) per sample. This way the
+    teacher (warm start, sigma ~0.2 as rebuilt, but any teacher) never pulls the
+    learner's log_std, so it cannot undo Phase 10's tight aim.
+
+    Returns a scalar tensor (mean over the batch), differentiable through the
+    learner's mean. The teacher is evaluated under no_grad.
+    """
+    mu_learner = ac.pi_net(obs)
+    with torch.no_grad():
+        mu_teacher = teacher.pi_net(obs)
+    var = ac.log_std.exp().pow(2)
+    per_dim = 0.5 * (mu_learner - mu_teacher).pow(2) / var
+    return per_dim.sum(dim=-1).mean()
+
+
 def update_from_data(ac, data, pi_optimizer, vf_optimizer, train_pi_iters=80,
                      train_v_iters=80, target_kl=0.02, clip_ratio=0.2,
                      minibatch_size=256, n_passes=10, ent_coef=0.0,
-                     max_grad_norm=0.5):
+                     max_grad_norm=0.5, n_passes_v=None, value_norm=None,
+                     kl_teacher=None, kl_coef=0.0, n_minibatches=None):
     """
     Docstring for update_from_data:
 
-    PPO update with minibatch SGD (Phase 3). Takes a prepared data dict (already
-    joined across games and advantage-normalized).
+    PPO update with minibatch SGD (Phase 3), extended in Phase 11.
 
-    Each "pass" is one sweep over the whole batch in shuffled minibatches of
-    'minibatch_size'. We run up to 'n_passes' passes (replacing the old 80
-    full-batch steps). On each minibatch:
-      - policy loss = clipped surrogate - ent_coef * entropy (entropy bonus),
-      - value loss on the same minibatch,
-      - gradients clipped to max_grad_norm (0.5) for both nets before stepping.
-    KL early stop is checked per pass (on the whole batch), with target_kl 0.02.
-    train_pi_iters / train_v_iters are kept for signature compatibility but the
-    minibatch schedule (n_passes) drives the loop now.
+    Policy and critic run SEPARATE pass loops (step 2): the policy sweeps the
+    batch `n_passes` times (with the per-pass KL early stop), then the critic
+    sweeps it `n_passes_v` times (default: same as `n_passes`). PPG found extra
+    value passes alone are viable and that the policy needs few passes once the
+    critic is well trained (Cobbe et al. 2020, https://arxiv.org/abs/2009.04416).
+
+    Other Phase 11 additions:
+      - value_norm (Running_mean_std): its running stats are updated once from this
+        batch's returns, then the critic is trained on NORMALIZED targets (step 1).
+        Explained variance is still measured on the raw return scale.
+      - kl_teacher + kl_coef: a mean-only KL penalty toward a frozen teacher added
+        to the policy loss, weight `kl_coef` (the caller fades it to 0, step 4).
+      - n_minibatches: when set, the batch is split into this many (roughly equal)
+        large minibatches instead of fixed `minibatch_size` chunks (self-play's
+        "4 large mini-batches", step 3).
+
+    minibatch_size is still used when n_minibatches is None. train_pi_iters /
+    train_v_iters are kept for signature compatibility.
 
     Returns diagnostics: losses, approx_kl, clip fraction, entropy, explained
-    variance and how many passes actually ran.
+    variance, policy + critic passes run, and the mean KL-to-teacher.
     """
+    import math as _math
+
     n = data['obs'].shape[0]
-    mb = min(minibatch_size, n)
+    if n_passes_v is None:
+        n_passes_v = n_passes
+    # minibatch size: either a fixed count of rows, or n split into n_minibatches
+    # roughly-equal chunks (the large-minibatch self-play setting).
+    if n_minibatches is not None and n_minibatches > 0:
+        mb = max(1, _math.ceil(n / n_minibatches))
+    else:
+        mb = min(minibatch_size, n)
+
+    # value_norm learns the return scale from THIS batch before the critic trains
+    # on it, so the targets the critic sees are unit-scale.
+    if value_norm is not None:
+        value_norm.update(data['ret'])
 
     # old losses + the pre-update KL (0 by definition) for logging
     with torch.no_grad():
         pi_l_old, pi_info_old = compute_loss_pi(ac, data, clip_ratio)
-        v_l_old = compute_loss_v(ac, data).item()
+        v_l_old = compute_loss_v(ac, data, value_norm=value_norm).item()
 
     last_kl = pi_info_old['kl']
     last_cf = pi_info_old['cf']
     last_ent = pi_info_old['ent']
+    last_kl_teacher = 0.0
     passes_run = 0
+    critic_passes_run = 0
+    device = data['obs'].device
 
+    # ---- policy passes (step 2): the clipped surrogate, entropy bonus and the
+    # faded KL-to-teacher term, with the per-pass KL early stop ----
     for p in range(n_passes):
-        # KL early stop, per pass, on the whole batch
         with torch.no_grad():
             _, full_info = compute_loss_pi(ac, data, clip_ratio)
         last_kl, last_cf, last_ent = full_info['kl'], full_info['cf'], full_info['ent']
@@ -920,33 +1050,44 @@ def update_from_data(ac, data, pi_optimizer, vf_optimizer, train_pi_iters=80,
             print(f'Early stopping at pass {p} due to reaching max kl ({last_kl:.4f}).')
             break
 
-        # shuffle and sweep in minibatches
-        idx = torch.randperm(n, device=data['obs'].device)
+        idx = torch.randperm(n, device=device)
         for start in range(0, n, mb):
             mb_idx = idx[start:start + mb]
             mb_data = {k: v[mb_idx] for k, v in data.items()}
 
-            # policy step with entropy bonus
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(ac, mb_data, clip_ratio)
             loss_pi = loss_pi - ent_coef * pi_info['ent_tensor']
+            if kl_teacher is not None and kl_coef > 0.0:
+                kl_t = kl_to_teacher(ac, kl_teacher, mb_data['obs'])
+                loss_pi = loss_pi + kl_coef * kl_t
+                last_kl_teacher = float(kl_t.item())
             loss_pi.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(ac.pi_net.parameters()) + [ac.log_std], max_grad_norm)
             pi_optimizer.step()
+        passes_run += 1
 
-            # value step
+    # ---- critic passes (step 2): run on their own, possibly more than the policy.
+    # targets are normalized by value_norm when it is on ----
+    for _ in range(n_passes_v):
+        idx = torch.randperm(n, device=device)
+        for start in range(0, n, mb):
+            mb_idx = idx[start:start + mb]
+            mb_data = {k: v[mb_idx] for k, v in data.items()}
             vf_optimizer.zero_grad()
-            loss_v = compute_loss_v(ac, mb_data)
+            loss_v = compute_loss_v(ac, mb_data, value_norm=value_norm)
             loss_v.backward()
             torch.nn.utils.clip_grad_norm_(ac.v_net.parameters(), max_grad_norm)
             vf_optimizer.step()
+        critic_passes_run += 1
 
-        passes_run += 1
-
-    # explained variance of the critic over the whole batch after the update
+    # explained variance of the critic over the whole batch after the update, on
+    # the RAW return scale (denormalize the critic's normalized output).
     with torch.no_grad():
         _, values_now = ac(data['obs'])
+        if value_norm is not None:
+            values_now = value_norm.denormalize(values_now)
     ev = explained_variance(values_now, data['ret'])
 
     return dict(
@@ -957,6 +1098,8 @@ def update_from_data(ac, data, pi_optimizer, vf_optimizer, train_pi_iters=80,
         ClipFrac=last_cf,
         ExplainedVariance=ev,
         PassesRun=passes_run,
+        CriticPassesRun=critic_passes_run,
+        KLTeacher=last_kl_teacher,
     )
 
 
@@ -1012,6 +1155,29 @@ if __name__ == '__main__':
                         help='absolute sigma for the noisy scoring pass (step 7); mean move drives best.pt')
     parser.add_argument('--best-path', default='checkpoints/best.pt',
                         help='where best.pt is written / rolled back from')
+    # ---- phase 11: critic + self-play steps ----
+    parser.add_argument('--clip-ratio', type=float, default=0.2,
+                        help='PPO clip epsilon (Phase 11 step 3 uses 0.1-0.15 for self-play)')
+    parser.add_argument('--n-passes-v', type=int, default=None,
+                        help='critic passes per update (Phase 11 step 2: 2-3x the policy passes); '
+                             'defaults to --n-passes when unset')
+    parser.add_argument('--value-norm', action='store_true',
+                        help='normalize value targets with a running mean/std, saved in checkpoints (step 1)')
+    parser.add_argument('--n-minibatches', type=int, default=None,
+                        help='split the batch into this many large minibatches instead of '
+                             '--minibatch-size chunks (Phase 11 step 3 uses 4)')
+    parser.add_argument('--kl-warm-start', default=None,
+                        help='frozen warm-start checkpoint to add a mean-only KL loss toward, '
+                             'faded to 0 over the first half of the run (step 4)')
+    parser.add_argument('--kl-coef', type=float, default=0.0,
+                        help='starting weight of the KL-to-warm-start loss (step 4)')
+    parser.add_argument('--kl-fade-fraction', type=float, default=0.5,
+                        help='fraction of the run over which the KL-to-warm-start weight fades to 0')
+    parser.add_argument('--use-layernorm', action='store_true',
+                        help='add LayerNorm to the hidden layers (step 5; changes the save format, '
+                             'needs a warm start rebuilt with it on)')
+    parser.add_argument('--weight-decay', type=float, default=0.0,
+                        help='Adam weight decay for both nets (step 5 pairs ~1e-4 with LayerNorm)')
     args = parser.parse_args()
 
     launcher = None
@@ -1045,4 +1211,13 @@ if __name__ == '__main__':
               live_elo_freq=args.live_elo_freq,
               live_elo_games=args.live_elo_games,
               live_elo_sigma=args.live_elo_sigma,
-              best_path=args.best_path)
+              best_path=args.best_path,
+              clip_ratio=args.clip_ratio,
+              n_passes_v=args.n_passes_v,
+              value_norm=args.value_norm,
+              n_minibatches=args.n_minibatches,
+              kl_warm_start=args.kl_warm_start,
+              kl_coef=args.kl_coef,
+              kl_fade_fraction=args.kl_fade_fraction,
+              use_layernorm=args.use_layernorm,
+              weight_decay=args.weight_decay)

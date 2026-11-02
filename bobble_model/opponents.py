@@ -181,9 +181,11 @@ class PolicyOpponent:
     std_scale and is likewise ignored when deterministic is True."""
 
     def __init__(self, state_dict=None, deterministic=False, hidden=(256, 256),
-                 name="policy", std_scale=1.0, abs_std=None):
-        self.net = Actor_critic_neural_network(obs_dim=14, act_dim=6, hidden=list(hidden))
+                 name="policy", std_scale=1.0, abs_std=None, use_layernorm=False):
+        self.net = Actor_critic_neural_network(obs_dim=14, act_dim=6, hidden=list(hidden),
+                                               use_layernorm=use_layernorm)
         self.net.eval()
+        self._hidden = tuple(hidden)
         self.deterministic = deterministic
         self.std_scale = float(std_scale)
         self.abs_std = None if abs_std is None else float(abs_std)
@@ -192,6 +194,18 @@ class PolicyOpponent:
             self.load(state_dict)
 
     def load(self, state_dict):
+        # A LayerNorm checkpoint carries an extra parametrised layer inside each
+        # hidden block (Linear -> LayerNorm -> activation), so 'pi_net.1.weight'
+        # exists only when LayerNorm is on. Rebuild the net to match the save's
+        # architecture before loading, so a scoring/eval PolicyOpponent handles a
+        # LayerNorm snapshot (Phase 11 step 5) without the caller passing a flag.
+        wants_ln = "pi_net.1.weight" in state_dict
+        if self.net.use_layernorm != wants_ln:
+            hidden = getattr(self, "_hidden", (256, 256))
+            self.net = Actor_critic_neural_network(obs_dim=14, act_dim=6,
+                                                   hidden=list(hidden),
+                                                   use_layernorm=wants_ln)
+            self.net.eval()
         self.net.load_state_dict(state_dict)
 
     def act(self, raw_obs):
@@ -259,17 +273,18 @@ class SelfPlayPool:
     """
 
     def __init__(self, max_size=10, scripted_prob=0.15, live_prob=0.30,
-                 hidden=(256, 256), pfsp=False, seed=None):
+                 hidden=(256, 256), pfsp=False, seed=None, use_layernorm=False):
         self.max_size = max_size
         self.scripted_prob = scripted_prob
         self.live_prob = live_prob
         self.pfsp = pfsp
         self.hidden = tuple(hidden)
+        self.use_layernorm = use_layernorm
         self.snapshots = []
         self.win_rates = []  # learner win rate vs each snapshot, same index as snapshots
         self.rng = random.Random(seed)
         self.scripted = ChaserOpponent(seed=seed)
-        self.policy = PolicyOpponent(hidden=hidden, name="self")
+        self.policy = PolicyOpponent(hidden=hidden, name="self", use_layernorm=use_layernorm)
         self.live = None  # LiveOpponent, set by attach_live() when a live net exists
         self.current = self.scripted
         self.last_index = None  # index of the frozen copy drawn this episode (PFSP)
@@ -297,7 +312,8 @@ class SelfPlayPool:
         siblings = [self]
         for i in range(1, n):
             sib = SelfPlayPool(self.max_size, self.scripted_prob, self.live_prob,
-                               self.hidden, pfsp=self.pfsp, seed=None)
+                               self.hidden, pfsp=self.pfsp, seed=None,
+                               use_layernorm=self.use_layernorm)
             # share the mutable snapshot + win-rate LISTS so an add() is seen by all
             sib.snapshots = self.snapshots
             sib.win_rates = self.win_rates
@@ -392,6 +408,7 @@ class SelfPlayPool:
             "live_prob": self.live_prob,
             "pfsp": self.pfsp,
             "hidden": self.hidden,
+            "use_layernorm": self.use_layernorm,
             "rng_state": self.rng.getstate(),
         }
 
@@ -401,8 +418,15 @@ class SelfPlayPool:
         self.scripted_prob = state.get("scripted_prob", self.scripted_prob)
         self.live_prob = state.get("live_prob", self.live_prob)
         self.pfsp = state.get("pfsp", self.pfsp)
+        self.use_layernorm = state.get("use_layernorm", self.use_layernorm)
         self.snapshots = [dict(s) for s in state.get("snapshots", [])]
         self.win_rates = list(state.get("win_rates", [0.5] * len(self.snapshots)))
+        # rebuild the frozen-copy player if the saved architecture differs, so a
+        # LayerNorm snapshot loads into a LayerNorm net (and vice versa) on resume.
+        if getattr(self.policy, "net", None) is None or \
+                self.policy.net.use_layernorm != self.use_layernorm:
+            self.policy = PolicyOpponent(hidden=self.hidden, name="self",
+                                         use_layernorm=self.use_layernorm)
         if "rng_state" in state:
             self.rng.setstate(state["rng_state"])
 

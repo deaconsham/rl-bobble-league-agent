@@ -67,6 +67,76 @@ def test_resume_restores_pool(tmp_path, monkeypatch):
     assert len(ckpt["pool"]["snapshots"]) >= 1
 
 
+def test_phase11_full_config_runs_and_saves_value_norm(tmp_path, monkeypatch):
+    """T2: a short run with every Phase 11 knob on (value norm, separate critic
+    passes, 4 large minibatches, a mean-only KL teacher) runs end to end on mock
+    games and writes checkpoints whose value_norm stats are populated (count past
+    its epsilon start, so at least one batch was folded in)."""
+    from neural_network import Actor_critic_neural_network
+    from training_loop import save_checkpoint
+    from torch.optim import Adam
+
+    monkeypatch.chdir(tmp_path)
+
+    # a frozen "warm start" teacher saved in the full checkpoint format
+    teacher = Actor_critic_neural_network(obs_dim=14, act_dim=6)
+    pi_opt = Adam(list(teacher.pi_net.parameters()) + [teacher.log_std], lr=3e-4)
+    vf_opt = Adam(teacher.v_net.parameters(), lr=1e-3)
+    teacher_path = str(tmp_path / "warm.pt")
+    save_checkpoint(teacher_path, teacher, pi_opt, vf_opt, epoch=0, lr_step=0)
+
+    vec = make_vec(tmp_path, n_games=6, goal_after=3)
+    ppo_train(vec_env=vec, epochs=2, steps_per_epoch=120, save_freq=1,
+              device="cpu", log_dir=str(tmp_path / "runs"),
+              value_norm=True, n_passes=5, n_passes_v=10, n_minibatches=4,
+              clip_ratio=0.15, kl_warm_start=teacher_path, kl_coef=1.0,
+              kl_fade_fraction=0.5, weight_decay=1e-4)
+
+    ckpt = load_checkpoint("checkpoints/ppo_epoch_1.pt")
+    assert "value_norm" in ckpt
+    # the normalizer saw real data: count grew past its tiny epsilon start
+    assert ckpt["value_norm"]["count"] > 1.0
+
+
+def test_phase11_layernorm_full_config_runs_and_saves(tmp_path, monkeypatch):
+    """T2 (step 5): the same Phase 11 knobs but with LayerNorm on. The warm-start
+    teacher must be built with LayerNorm too, because LayerNorm changes the saved
+    weight shape and a plain teacher would not load into the LayerNorm learner.
+    The run completes on mock games and still writes value_norm stats, so the
+    LayerNorm + weight-decay + value-norm + KL-teacher paths all wire together."""
+    from neural_network import Actor_critic_neural_network
+    from training_loop import save_checkpoint
+    from torch.optim import Adam
+
+    monkeypatch.chdir(tmp_path)
+
+    # a frozen LayerNorm "warm start" teacher saved in the full checkpoint format
+    teacher = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
+    pi_opt = Adam(list(teacher.pi_net.parameters()) + [teacher.log_std], lr=3e-4)
+    vf_opt = Adam(teacher.v_net.parameters(), lr=1e-3)
+    teacher_path = str(tmp_path / "warm_ln.pt")
+    save_checkpoint(teacher_path, teacher, pi_opt, vf_opt, epoch=0, lr_step=0)
+
+    vec = make_vec(tmp_path, n_games=6, goal_after=3)
+    ppo_train(vec_env=vec, epochs=2, steps_per_epoch=120, save_freq=1,
+              device="cpu", log_dir=str(tmp_path / "runs"),
+              use_layernorm=True, weight_decay=1e-4,
+              value_norm=True, n_passes=5, n_passes_v=10, n_minibatches=4,
+              clip_ratio=0.15, kl_warm_start=teacher_path, kl_coef=1.0,
+              kl_fade_fraction=0.5)
+
+    ckpt = load_checkpoint("checkpoints/ppo_epoch_1.pt")
+    assert "value_norm" in ckpt
+    assert ckpt["value_norm"]["count"] > 1.0
+    # the saved net is a LayerNorm net: it loads into a LayerNorm AC and refuses a plain one
+    ac_ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
+    ac_ln.load_state_dict(ckpt["model"])  # must not raise
+    ac_plain = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=False)
+    import pytest
+    with pytest.raises(RuntimeError):
+        ac_plain.load_state_dict(ckpt["model"])
+
+
 def test_single_game_shaping_fade(tmp_path, monkeypatch):
     # regression: the games == 1 path wraps the env in _Single_env_as_vector, and
     # the shaping-fade loop reads and rewrites env.reward_config each epoch. the

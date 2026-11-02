@@ -279,3 +279,52 @@ def test_policy_std_scale_affects_sampling_spread():
     small_dev = np.std([small.act(raw) - mean for _ in range(200)])
     wide_dev = np.std([wide.act(raw) - mean for _ in range(200)])
     assert small_dev < wide_dev
+
+
+# ---- Phase 11 step 5: LayerNorm snapshots load into scoring/self-play opponents ----
+
+def test_policy_opponent_auto_detects_layernorm_snapshots():
+    """A PolicyOpponent must load a LayerNorm checkpoint even when it was built
+    plain (and vice versa): the live-Elo and T5 scorers construct it without
+    knowing the subject's architecture, so load() infers LayerNorm from the
+    state_dict and rebuilds the net to match. Without this the step-5 run crashes
+    the moment the pool or the scorer meets a LayerNorm snapshot."""
+    ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
+    plain = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=False)
+    raw = np.zeros(14, dtype=np.float32)
+
+    po = PolicyOpponent(hidden=(256, 256))       # built plain
+    po.load(ln.state_dict())                     # fed a LayerNorm save
+    assert po.net.use_layernorm is True
+    assert po.act(raw).shape == (6,)
+    po.load(plain.state_dict())                  # and back to plain
+    assert po.net.use_layernorm is False
+    assert po.act(raw).shape == (6,)
+
+
+def test_self_play_pool_loads_a_layernorm_snapshot():
+    """A LayerNorm self-play pool seeded with a LayerNorm snapshot plays it on a
+    frozen-copy reset without a shape mismatch (Phase 11 step 5)."""
+    ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
+    pool = SelfPlayPool(scripted_prob=0.0, live_prob=0.0, use_layernorm=True, seed=0)
+    pool.add(ln.state_dict())
+    drew_self = False
+    for _ in range(20):
+        pool.reset()
+        if pool.name == "self":
+            drew_self = True
+            assert pool.act(np.zeros(14, dtype=np.float32)).shape == (6,)
+    assert drew_self
+
+
+def test_pool_state_round_trips_use_layernorm():
+    """A saved LayerNorm pool restores as LayerNorm, so a resumed step-5 run loads
+    its snapshots into the right architecture."""
+    ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
+    pool = SelfPlayPool(use_layernorm=True, seed=0)
+    pool.add(ln.state_dict())
+    restored = SelfPlayPool(use_layernorm=False, seed=0)  # wrong flag on purpose
+    restored.load_state(pool.state())
+    assert restored.use_layernorm is True
+    assert restored.policy.net.use_layernorm is True
+    restored.policy.load(restored.snapshots[0])  # must not raise
