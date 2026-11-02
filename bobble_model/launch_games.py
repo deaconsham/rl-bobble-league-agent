@@ -80,7 +80,7 @@ class Game_launcher:
     """
 
     def __init__(self, n_games, godot_exe=None, project_path=None, shm_prefix=None,
-                 log_dir=None, timescale=48):
+                 log_dir=None, timescale=48, shm_paths=None, log_tag="godot"):
         self.n_games = n_games
         self.godot_exe = godot_exe or default_godot_exe()
         self.project_path = os.path.abspath(project_path or default_project_path())
@@ -90,8 +90,19 @@ class Game_launcher:
         self.timescale = timescale
         os.makedirs(self.log_dir, exist_ok=True)
 
-        self.shm_paths = [shm_path_for(i, self.shm_prefix) for i in range(n_games)]
-        self.log_paths = [log_path_for(i, self.log_dir) for i in range(n_games)]
+        # shm_paths: an explicit list (one per game) overrides the default per-index
+        # temp paths, so a caller can point a launcher at a KNOWN shm file (e.g. the
+        # single spare live-Elo game, which must live at --live-elo-shm so it can be
+        # relaunched there). log_tag keeps the spare game's logs out of the training
+        # games' godot_<i>.log files.
+        if shm_paths is not None:
+            self.shm_paths = [os.path.abspath(p) for p in shm_paths]
+            if len(self.shm_paths) != n_games:
+                raise ValueError(f"need {n_games} shm_paths, got {len(self.shm_paths)}")
+        else:
+            self.shm_paths = [shm_path_for(i, self.shm_prefix) for i in range(n_games)]
+        self.log_paths = [os.path.join(self.log_dir, f"{log_tag}_{i}.log")
+                          for i in range(n_games)]
         self.pids = [None] * n_games
 
     def _args(self, index):

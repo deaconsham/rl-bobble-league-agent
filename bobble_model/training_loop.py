@@ -558,6 +558,8 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
               pfsp=False, shaping_fade=False, shaping_fade_fraction=0.5,
               live_elo_shm=None, live_elo_freq=10, live_elo_games=20,
               live_elo_sigma=0.1, best_path='checkpoints/best.pt',
+              live_elo_launcher=None, live_elo_index=0, live_elo_step_timeout=20.0,
+              live_elo_check_budget=180.0,
               n_passes_v=None, value_norm=False, n_minibatches=None,
               kl_warm_start=None, kl_coef=0.0, kl_fade_fraction=0.5,
               use_layernorm=False, weight_decay=0.0, input_norm=False,
@@ -747,8 +749,16 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     # league_eval), scored both with the mean move and with a small fixed sigma.
     # the mean-move Elo drives best.pt and the >100-drop roll-back. live_elo_shm
     # None (mock tests, smoke) turns the whole block off.
+    #
+    # Phase 12 review fix for the decade-boundary deadlock: the spare game gets its
+    # OWN short step_timeout (live_elo_step_timeout, NOT the long training one), is
+    # RELAUNCHED when it wedges (live_elo_launcher, mirroring Vector_env's per-game
+    # restart), and the whole check is bounded by live_elo_check_budget, so a hung
+    # spare game can never idle-poll the training process for the full
+    # n_games * anchors * step_timeout it used to.
     live_elo_env = None
     best_tracker = None
+    live_elo_env_box = [None]  # one-slot box so the relaunch closure can swap the env
     if live_elo_shm:
         from bobble_league_env import Bobble_league_env
         from opponents import make_test_opponent
@@ -756,22 +766,62 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
             Best_tracker, LIVE_ANCHORS, live_elo_rating, score_vs_anchors,
             head_to_head,
         )
-        live_elo_env = Bobble_league_env(
-            opponent=None, max_ep_len=max_ep_len, step_timeout=step_timeout,
-            bridge=Shared_memory_link(path=os.path.abspath(live_elo_shm), create=False))
+        _live_elo_shm_abs = os.path.abspath(live_elo_shm)
+
+        def _make_live_elo_env():
+            return Bobble_league_env(
+                opponent=None, max_ep_len=max_ep_len, step_timeout=live_elo_step_timeout,
+                bridge=Shared_memory_link(path=_live_elo_shm_abs, create=False))
+
+        live_elo_env = _make_live_elo_env()
+        live_elo_env_box[0] = live_elo_env
         live_anchors = {name: make_test_opponent(name) for name in LIVE_ANCHORS}
         best_tracker = Best_tracker()
 
+        def _relaunch_live_elo():
+            """Restart the spare Godot after it wedges and hand back a fresh env.
+            Returns None when there is no launcher to restart it (then the check
+            bails out cleanly rather than hanging)."""
+            if live_elo_launcher is None:
+                return None
+            try:
+                try:
+                    live_elo_env_box[0].close()
+                except Exception:
+                    pass
+                live_elo_launcher.stop_one(live_elo_index)
+                live_elo_launcher.launch_one(live_elo_index)
+                live_elo_launcher.wait_for_handshake(
+                    live_elo_index, timeout=live_elo_step_timeout)
+                fresh = _make_live_elo_env()
+                live_elo_env_box[0] = fresh
+                print("Live Elo: spare game relaunched after a hang", flush=True)
+                return fresh
+            except (TimeoutError, RuntimeError, OSError, ValueError) as e:
+                print(f"Live Elo: spare-game relaunch failed: {e}", flush=True)
+                return None
+
     def run_live_elo(epoch):
         """Score the current net on the spare game and fold the result into
-        best.pt / roll-back. Returns the mean-move Elo (or None when off)."""
+        best.pt / roll-back. Returns the mean-move Elo (or None when off).
+
+        The whole check is bounded by live_elo_check_budget (Phase 12 review fix):
+        a wedged spare game is relaunched once, and once the budget is spent the
+        remaining games are scored draws so the check returns instead of idling the
+        training process for minutes at a decade boundary."""
+        import time as _time
+        deadline = _time.monotonic() + live_elo_check_budget
         state = {k: v.detach().cpu().clone() for k, v in ac.state_dict().items()}
         # mean move (how play actually works) and a small fixed sigma (training
         # samples noisy moves), step 7 - both scored, mean drives the decisions.
-        rec_mean = score_vs_anchors(live_elo_env, state, live_anchors,
-                                    n_games=live_elo_games, abs_std=None)
-        rec_noisy = score_vs_anchors(live_elo_env, state, live_anchors,
-                                     n_games=live_elo_games, abs_std=live_elo_sigma)
+        env0 = live_elo_env_box[0]
+        env0, rec_mean = score_vs_anchors(env0, state, live_anchors,
+                                          n_games=live_elo_games, abs_std=None,
+                                          relaunch=_relaunch_live_elo, deadline=deadline)
+        env0, rec_noisy = score_vs_anchors(env0, state, live_anchors,
+                                           n_games=live_elo_games, abs_std=live_elo_sigma,
+                                           relaunch=_relaunch_live_elo, deadline=deadline)
+        live_elo_env_box[0] = env0
         elo_mean = live_elo_rating({k: v for k, v in rec_mean.items()})
         elo_noisy = live_elo_rating({k: v for k, v in rec_noisy.items()})
 
@@ -781,8 +831,10 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         if best_tracker.best_elo is not None and elo_mean > best_tracker.best_elo \
                 and os.path.exists(best_path):
             from opponents import load_state_dict as _load
-            h2h = head_to_head(live_elo_env, state, _load(best_path),
-                               n_games=live_elo_games)
+            env0, h2h = head_to_head(live_elo_env_box[0], state, _load(best_path),
+                                     n_games=live_elo_games,
+                                     relaunch=_relaunch_live_elo, deadline=deadline)
+            live_elo_env_box[0] = env0
         decision = best_tracker.consider(epoch, elo_mean, head_to_head_record=h2h)
         if decision['became_best']:
             save_checkpoint(best_path, ac, pi_optimizer, vf_optimizer, epoch,
@@ -1010,8 +1062,11 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
 
     writer.close()
     env.close()
-    if live_elo_env is not None:
-        live_elo_env.close()
+    if live_elo_env_box[0] is not None:
+        try:
+            live_elo_env_box[0].close()
+        except Exception:
+            pass
     return ac
 
 
@@ -1215,6 +1270,14 @@ if __name__ == '__main__':
                         help='absolute sigma for the noisy scoring pass (step 7); mean move drives best.pt')
     parser.add_argument('--best-path', default='checkpoints/best.pt',
                         help='where best.pt is written / rolled back from')
+    parser.add_argument('--live-elo-step-timeout', type=float, default=20.0,
+                        help='per-turn timeout (s) for the spare live-Elo game, kept SHORT and '
+                             'separate from the training --step-timeout so a wedged spare game is '
+                             'noticed fast (Phase 12 review deadlock fix)')
+    parser.add_argument('--live-elo-check-budget', type=float, default=180.0,
+                        help='overall wall-clock cap (s) for one live-Elo check; once spent the '
+                             'remaining games score draws so a boundary wedge cannot idle the run '
+                             '(Phase 12 review deadlock fix)')
     # ---- phase 11: critic + self-play steps ----
     parser.add_argument('--clip-ratio', type=float, default=0.2,
                         help='PPO clip epsilon (Phase 11 step 3 uses 0.1-0.15 for self-play)')
@@ -1263,7 +1326,23 @@ if __name__ == '__main__':
         launcher = Game_launcher(args.games, godot_exe=args.godot, project_path=args.project,
                                  shm_prefix=args.shm_prefix, log_dir='logs', timescale=args.timescale)
 
-    ppo_train(env_fn=bobble_league_env_helper,
+    # dedicated launcher for the ONE spare live-Elo game, so a wedged spare game
+    # can be relaunched the same way Vector_env relaunches a training game (Phase
+    # 12 review deadlock fix). Only built when we own Godot launching (--launch);
+    # when the spare game is brought up externally there is no launcher to relaunch
+    # it, and the live-Elo check instead bails out on its budget rather than hang.
+    live_elo_launcher = None
+    if args.live_elo_shm and args.launch:
+        from launch_games import Game_launcher
+        live_elo_launcher = Game_launcher(
+            1, godot_exe=args.godot, project_path=args.project,
+            shm_prefix=args.shm_prefix, log_dir='logs', timescale=args.timescale,
+            shm_paths=[args.live_elo_shm], log_tag="godot_live_elo")
+        live_elo_launcher.launch_one(0)
+        live_elo_launcher.wait_for_handshake(0, timeout=max(30.0, args.live_elo_step_timeout))
+
+    try:
+        ppo_train(env_fn=bobble_league_env_helper,
               epochs=args.epochs,
               steps_per_epoch=args.steps_per_epoch,
               max_ep_len=args.max_ep_len,
@@ -1289,6 +1368,10 @@ if __name__ == '__main__':
               live_elo_games=args.live_elo_games,
               live_elo_sigma=args.live_elo_sigma,
               best_path=args.best_path,
+              live_elo_launcher=live_elo_launcher,
+              live_elo_index=0,
+              live_elo_step_timeout=args.live_elo_step_timeout,
+              live_elo_check_budget=args.live_elo_check_budget,
               clip_ratio=args.clip_ratio,
               n_passes_v=args.n_passes_v,
               value_norm=args.value_norm,
@@ -1302,3 +1385,8 @@ if __name__ == '__main__':
               random_start_prob=args.random_start_prob,
               reward_scale=args.reward_scale,
               potential_shaping=args.potential_shaping)
+    finally:
+        # stop the spare live-Elo Godot we launched (the training games are stopped
+        # by ppo_train's env.close()). only this one is ours to stop here.
+        if live_elo_launcher is not None:
+            live_elo_launcher.stop_all()

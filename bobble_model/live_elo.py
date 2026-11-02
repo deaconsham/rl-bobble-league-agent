@@ -16,6 +16,8 @@ Two pieces, kept apart so the maths is unit-testable without Godot:
   - score_vs_anchors / Best_tracker: drive a real spare game and hold the best /
     rollback state. The training loop calls these.
 """
+import time
+
 import numpy as np
 
 from elo import Elo_table
@@ -59,26 +61,74 @@ def live_elo_rating(records, k=32.0, anchor_ratings=None, label="live"):
     return table.rating(label)
 
 
-def _play_match(env, agent, n_games):
+def _reset_quietly(env):
+    """Reset the spare game, swallowing a reset timeout so a wedged game can never
+    propagate out of the eval. Returns True on a clean reset, False on a timeout."""
+    try:
+        env.reset()
+        return True
+    except TimeoutError:
+        return False
+
+
+def _play_match(env, agent, n_games, relaunch=None, deadline=None, max_hangs=2):
     """Play n_games with `agent` on the learner side against env's current
-    opponent. Returns (wins, losses, draws) from the learner's point of view. A
-    turn that never settles counts the game a draw and resets, so one wedged turn
-    cannot block the check (mirrors league_eval.play_match)."""
+    opponent. Returns (env, wins, losses, draws) from the learner's point of view.
+
+    Resilient to a wedged spare game (Phase 12 review fix). A turn that never
+    settles raises TimeoutError from the bridge; the OLD code then scored a draw
+    and moved on, but kept hammering the SAME dead game, so a boundary wedge cost
+    n_games * step_timeout of idle polling (the decade-boundary "deadlock"). Now:
+
+      - `relaunch`: optional callable that restarts the spare Godot and returns a
+        fresh env (like Vector_env's per-game restart). Called once on the first
+        hang; the match then carries on against the fresh game.
+      - `max_hangs`: after this many hangs (default 2) the game is treated as
+        genuinely dead: the remaining games are scored draws AT ONCE and the match
+        returns, instead of waiting out another timeout per game.
+      - `deadline`: optional absolute time.monotonic() cap for the WHOLE match;
+        once passed, the rest of the games are scored draws immediately. The caller
+        sets one per check so a single boundary can never eat the run.
+
+    A turn or reset timeout always counts the game a draw, mirroring
+    league_eval.play_match. The returned env may be a FRESH one after a relaunch,
+    so the caller must use the returned env from here on."""
     wins = losses = draws = 0
-    env.reset()
-    for _ in range(n_games):
+    hangs = 0
+    _reset_quietly(env)
+    games_done = 0
+    while games_done < n_games:
+        # out of time: score every remaining game a draw and stop.
+        if deadline is not None and time.monotonic() > deadline:
+            draws += n_games - games_done
+            break
         done = False
         while not done:
+            if deadline is not None and time.monotonic() > deadline:
+                draws += n_games - games_done
+                return env, wins, losses, draws
             action = agent.act(env._raw_obs)
             try:
                 _, _, terminated, truncated, info = env.step(action)
             except TimeoutError:
+                hangs += 1
                 draws += 1
+                games_done += 1
                 done = True
-                try:
-                    env.reset()
-                except TimeoutError:
-                    pass
+                if relaunch is not None and hangs == 1:
+                    # first hang: try to bring the spare game back (Vector_env does
+                    # the same per game). a fresh env replaces the wedged one.
+                    fresh = relaunch()
+                    if fresh is not None:
+                        env = fresh
+                        _reset_quietly(env)
+                        break
+                if hangs >= max_hangs:
+                    # genuinely dead: score the rest draws at once, do not keep
+                    # waiting a full timeout per remaining game.
+                    draws += n_games - games_done
+                    return env, wins, losses, draws
+                _reset_quietly(env)
                 break
             if terminated or truncated:
                 scorer = info.get("scorer", 0) if terminated else 0
@@ -88,12 +138,14 @@ def _play_match(env, agent, n_games):
                     losses += 1
                 else:
                     draws += 1
+                games_done += 1
                 done = True
-                env.reset()
-    return wins, losses, draws
+                _reset_quietly(env)
+    return env, wins, losses, draws
 
 
-def score_vs_anchors(env, state_dict, anchors, n_games=20, abs_std=None):
+def score_vs_anchors(env, state_dict, anchors, n_games=20, abs_std=None,
+                     relaunch=None, deadline=None):
     """
     Docstring for score_vs_anchors:
 
@@ -101,7 +153,12 @@ def score_vs_anchors(env, state_dict, anchors, n_games=20, abs_std=None):
     (env), n_games each. `state_dict` is the net weights to score; `anchors` is
     {name: opponent}. With abs_std None the net plays its mean move
     (deterministic); with abs_std set it samples at that absolute spread (the
-    small-sigma scoring, step 7). Returns {name: (wins, losses, draws)}.
+    small-sigma scoring, step 7).
+
+    `relaunch` / `deadline` are passed through to `_play_match` so a wedged spare
+    game is restarted (or the check bailed out) instead of hanging (Phase 12 review
+    fix). Returns (env, {name: (wins, losses, draws)}): env may be a fresh one after
+    a relaunch, so the caller keeps the returned env.
     """
     deterministic = abs_std is None
     agent = PolicyOpponent(state_dict, deterministic=deterministic,
@@ -109,18 +166,26 @@ def score_vs_anchors(env, state_dict, anchors, n_games=20, abs_std=None):
     records = {}
     for name, opp in anchors.items():
         env.opponent = opp
-        records[name] = _play_match(env, agent, n_games)
-    return records
+        env, w, l, d = _play_match(env, agent, n_games,
+                                   relaunch=relaunch, deadline=deadline)
+        records[name] = (w, l, d)
+    return env, records
 
 
-def head_to_head(env, state_dict_a, state_dict_b, n_games=20):
+def head_to_head(env, state_dict_a, state_dict_b, n_games=20, relaunch=None,
+                 deadline=None):
     """Play net A (learner, mean move) vs net B (opponent, mean move) on the spare
-    game, n_games. Returns A's (wins, losses, draws). Used for the best.pt gate:
-    a challenger must beat the current best here, not just post a higher Elo."""
+    game, n_games. Returns (env, A's (wins, losses, draws)). Used for the best.pt
+    gate: a challenger must beat the current best here, not just post a higher Elo.
+
+    `relaunch` / `deadline` are passed through to `_play_match` (Phase 12 review
+    fix). env may be a fresh one after a relaunch, so the caller keeps it."""
     agent = PolicyOpponent(state_dict_a, deterministic=True, name="challenger")
     opp = PolicyOpponent(state_dict_b, deterministic=True, name="best")
     env.opponent = opp
-    return _play_match(env, agent, n_games)
+    env, w, l, d = _play_match(env, agent, n_games,
+                               relaunch=relaunch, deadline=deadline)
+    return env, (w, l, d)
 
 
 def beats_best(wins, losses, draws, threshold=BEST_GATE_WIN_RATE):
