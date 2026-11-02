@@ -15,7 +15,14 @@ from shared_memory_link import Shared_memory_link
 # policy. Hence the tag is pinned to the era it belongs to, not the live protocol
 # version: new saves are tagged ACTION_FORMAT_VERSION, and any save at or above
 # MIN_ACTION_FORMAT (the angle+power era) loads.
-ACTION_FORMAT_VERSION = Shared_memory_link.PROTOCOL_VERSION
+#
+# ACTION_FORMAT_VERSION is PINNED to the angle+power era (3), NOT tied to
+# Shared_memory_link.PROTOCOL_VERSION: tying it to the live protocol stamped every
+# save made after a side-channel-only bump (v4 telemetry, v5 random-start / OOB)
+# with that higher number, which is wrong because the action/obs contract did not
+# change. Pinning it means a real future action change is the ONLY thing that
+# bumps this tag, and a save keeps the tag of the era it was trained in.
+ACTION_FORMAT_VERSION = 3
 MIN_ACTION_FORMAT = 3
 
 def get_device(device=None):

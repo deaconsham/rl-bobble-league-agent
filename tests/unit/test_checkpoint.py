@@ -112,13 +112,18 @@ def test_old_checkpoint_is_refused_by_eval_loader(tmp_path):
 
 
 def test_new_checkpoint_loads_through_both_paths(tmp_path):
-    """a Phase 2 save (carrying action_format) loads cleanly in both loaders."""
+    """a Phase 2 save (carrying action_format) loads cleanly in both loaders, and
+    is tagged with the PINNED angle+power era (ACTION_FORMAT_VERSION == 3), NOT the
+    live protocol version: a side-channel-only protocol bump (v4/v5) must not change
+    the action-format tag, since the action/obs contract did not change."""
     from opponents import load_state_dict as opp_load
+    from training_loop import ACTION_FORMAT_VERSION
 
+    assert ACTION_FORMAT_VERSION == 3
     ac, pi_opt, vf_opt = make_ac_and_opts()
     path = str(tmp_path / "new.pt")
     save_checkpoint(path, ac, pi_opt, vf_opt, epoch=0, lr_step=0)
-    assert load_checkpoint(path)["action_format"] == Shared_memory_link.PROTOCOL_VERSION
+    assert load_checkpoint(path)["action_format"] == ACTION_FORMAT_VERSION
     sd = opp_load(path)
     ac2, _, _ = make_ac_and_opts()
     ac2.load_state_dict(sd)
