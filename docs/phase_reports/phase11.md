@@ -149,34 +149,49 @@ Reads:
   save, **ln epoch 80 = 1039.1**, beats both the frozen 938.3 bar (+101) and the
   same-run best_p10 (918.3, +121). Even the LayerNorm warm start alone (995.9)
   edges best_p10.
-- **The gate-selected `best.pt` (epoch 99) scored 921.5** — essentially tied with
-  best_p10 (918.3), NOT clearly above. The 2-anchor live-Elo gate picked epoch 99
-  over the T5-strongest epoch 80. So "best SAVE beats 938.3" depends on which save:
-  epoch 80 does, the gate's epoch 99 does not.
+- **The gate-selected epoch 99 scored 921.5** — essentially tied with best_p10
+  (918.3), NOT clearly above. The 2-anchor live-Elo gate picked epoch 99 over the
+  T5-strongest epoch 80. Epoch 80 is the save adopted as the Phase 11 best (see
+  Pass decision and the gate-noise finding below).
 - The steps-1-4 best (841.3) is well below Phase 10 and loses 0% vs replay — steps
   1-4 without LayerNorm regressed, which is exactly why the plan gates step 5 on
   low EV.
 
-## Open decision for the conductor
+## Pass decision
 
-The brief's bar is "best save beats 938.3". Under the deciding step-5 run:
+**Phase 11 PASSES on its strongest save.** The conductor adopted **ln epoch 80**
+as the Phase 11 best:
 
-- If "best save" means the strongest saved checkpoint on the T5 scale, **PASS**:
-  ln epoch 80 = 1039.1, > 938.3 and > same-run best_p10 (918.3).
-- If "best save" means the literal `best.pt` the live-Elo gate chose (epoch 99),
-  it is **921.5** — not clearly above the bar.
+- ln epoch 80 = **1039.1**, which beats the frozen 938.3 bar (+101) and the
+  same-run best_p10 (918.3, +121). Both margins are 100+ points, well outside the
+  ~20-point run-to-run noise of this anchored scale.
+- T3: EV peaked 0.563 and cleared 0.4 three times (steps 1-4 never exceeded
+  0.375), so the LayerNorm step lifted the value fit as intended.
 
-Per the brief ("if T5 misses, do not re-plan on your own; report a question"), I
-am not deciding this. The natural resolution is to adopt ln epoch 80 as the
-Phase 11 best (copy `checkpoints/ppo_epoch_80.pt` over `best_p11_ln.pt`), since
-the 4-anchor T5 is the real strength measure and the 2-anchor live gate is
-noisier. That is a conductor call.
+`checkpoints/ppo_epoch_80.pt` was copied over `checkpoints/best_p11_ln.pt` — that
+is the Phase 11 best Phase 12 starts from. The live-Elo gate's own pick (epoch 99)
+is kept on disk as `checkpoints/best_p11_ln_gatepick_epoch99.pt` so it is clearly
+the gate's pick, not the best.
+
+## Gate-noise finding for Phase 12 / review
+
+The 2-anchor, 20-game live-Elo gate ranked the saves differently from the
+4-anchor, 40-game T5: the gate picked epoch 99 (T5 Elo 921.5) as best, but the
+T5-strongest save was epoch 80 (1039.1). The gate even logged epoch 40 at live
+Elo 1098.9 without saving it. **20-game live checks are too noisy to rank close
+saves.** Phase 12 / review should either widen the live gate (more anchors and/or
+more games), or drop it as the best-save selector and run a short multi-anchor
+eval over the top few saves at run end to pick the best. Left as-is, the gate can
+hand a weaker `best.pt` to the next phase than the run actually produced.
 
 ## Artifacts
 
-- Step-5 best (gate pick): `bobble_model/checkpoints/best_p11_ln.pt` (epoch 99,
+- **Phase 11 best (adopted, Phase 12 start):**
+  `bobble_model/checkpoints/best_p11_ln.pt` (epoch 80, T5 Elo 1039.1; a copy of
+  `ppo_epoch_80.pt`).
+- Gate's own pick (kept for reference, NOT the best):
+  `bobble_model/checkpoints/best_p11_ln_gatepick_epoch99.pt` (epoch 99,
   T5 Elo 921.5).
-- Step-5 strongest save: `bobble_model/checkpoints/ppo_epoch_80.pt` (T5 Elo 1039.1).
 - Steps-1-4 best: `bobble_model/checkpoints/best_p11.pt` (epoch 60, T5 Elo 841.3).
 - LayerNorm warm start: `bobble_model/checkpoints/warm_start_ln.pt`.
 - Phase 10 best (baseline, archived): `bobble_model/p10_run/archive/best_p10.pt`.
