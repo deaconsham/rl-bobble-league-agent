@@ -194,6 +194,32 @@ def test_higher_elo_and_wins_h2h_becomes_best():
     assert t.best_elo == pytest.approx(950.0)
 
 
+def test_noise_margin_blocks_a_save_only_slightly_ahead():
+    # Phase 12 review item 3: the live gate carries ~20 Elo of noise, so a save
+    # that is only a few Elo ahead (within the noise) must NOT replace best even if
+    # it squeaks the head-to-head. The default margin is 25.
+    from live_elo import BEST_MARGIN_ELO
+    assert BEST_MARGIN_ELO == pytest.approx(25.0)
+    t = Best_tracker()
+    t.consider(epoch=0, elo=1000.0)                 # best = 1000
+    # 1010 is only +10 (< 25 margin), even with a winning h2h -> not promoted
+    d = t.consider(epoch=10, elo=1010.0, head_to_head_record=(12, 7, 1))
+    assert d["became_best"] is False
+    assert t.best_elo == pytest.approx(1000.0)
+    # a save clearly past the margin AND winning the h2h still promotes
+    d2 = t.consider(epoch=20, elo=1040.0, head_to_head_record=(12, 7, 1))
+    assert d2["became_best"] is True
+    assert t.best_elo == pytest.approx(1040.0)
+
+
+def test_margin_can_be_tuned_off():
+    # margin 0 restores the pre-review behaviour (any higher Elo + winning h2h).
+    t = Best_tracker(best_margin=0.0)
+    t.consider(epoch=0, elo=1000.0)
+    d = t.consider(epoch=10, elo=1005.0, head_to_head_record=(12, 7, 1))
+    assert d["became_best"] is True
+
+
 def test_rollback_after_two_big_drops():
     t = Best_tracker()
     t.consider(epoch=0, elo=1000.0)                 # best = 1000

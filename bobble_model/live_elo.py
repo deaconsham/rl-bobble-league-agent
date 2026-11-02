@@ -37,6 +37,15 @@ BEST_GATE_WIN_RATE = 0.55
 ROLLBACK_ELO_DROP = 100.0
 ROLLBACK_CHECKS = 2
 
+# a challenger must beat the current best's live Elo by MORE than this margin (on
+# top of winning the head-to-head) before it replaces best.pt. Phase 11 found the
+# 2-anchor / 20-game live gate carries ~20 Elo of run-to-run noise and once handed
+# a weaker save to the next phase (it ranked epoch 99 / T5 921.5 over epoch 80 /
+# T5 1039.1). Requiring a margin above that noise band stops a save that is only
+# noise-ahead from overwriting a genuinely stronger best. The head-to-head gate
+# still applies as well, so both must pass.
+BEST_MARGIN_ELO = 25.0
+
 
 def live_elo_rating(records, k=32.0, anchor_ratings=None, label="live"):
     """
@@ -220,10 +229,14 @@ class Best_tracker:
     """
 
     def __init__(self, elo_drop=ROLLBACK_ELO_DROP, rollback_checks=ROLLBACK_CHECKS,
-                 gate=BEST_GATE_WIN_RATE):
+                 gate=BEST_GATE_WIN_RATE, best_margin=BEST_MARGIN_ELO):
         self.elo_drop = float(elo_drop)
         self.rollback_checks = int(rollback_checks)
         self.gate = float(gate)
+        # Elo margin a challenger must clear ABOVE the current best (on top of the
+        # head-to-head gate) to replace it, so live-gate noise cannot promote a
+        # weaker save (Phase 11 gate-noise finding).
+        self.best_margin = float(best_margin)
         self.best_elo = None     # Elo of the current best
         self.best_epoch = None   # epoch the current best was saved at
         self.down_streak = 0     # consecutive checks far below the best
@@ -249,14 +262,16 @@ class Best_tracker:
 
         became_best = False
         reason = ""
-        if elo > self.best_elo and head_to_head_record is not None:
+        # a challenger must clear the best by MORE than best_margin (noise guard)
+        # AND win the head-to-head, before it replaces best.pt.
+        if elo > self.best_elo + self.best_margin and head_to_head_record is not None:
             w, l, d = head_to_head_record
             if beats_best(w, l, d, self.gate):
                 old = self.best_elo
                 self.best_elo = float(elo)
                 self.best_epoch = int(epoch)
                 became_best = True
-                reason = (f"new best at epoch {epoch}: elo {elo:.1f} > {old:.1f} "
+                reason = (f"new best at epoch {epoch}: elo {elo:.1f} > {old:.1f}+{self.best_margin:.0f} "
                           f"and h2h W{w} L{l} D{d} beats best")
 
         # rollback accounting: a check far below the best is a "down" check.
