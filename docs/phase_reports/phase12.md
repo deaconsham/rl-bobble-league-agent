@@ -229,6 +229,7 @@ here so it is not rediscovered from scratch.
 
 ## Commit
 
-Committed on branch `ai-vs-ai-optimization` as `__COMMIT_HASH__` (not pushed).
-Verification at commit: `pytest -m "not live"` 190 passed, `dotnet build` 0
-errors, short T4 smoke on 2 games `SMOKE_DONE_0` (0 restarts, 0 OOB, 0 stuck).
+Committed on branch `ai-vs-ai-optimization` as `ce4234c` (not pushed). The
+report's own hash-fill is a follow-up commit on top. Verification at `ce4234c`:
+`pytest -m "not live"` 190 passed, `dotnet build` 0 errors, short T4 smoke on 2
+games `SMOKE_DONE_0` (0 restarts, 0 OOB, 0 stuck).
