@@ -1,15 +1,16 @@
 """
 fake godot for the mock game tests. opens the shm file, zeroes it, writes
-protocol v4, then answers reset and step requests with simple fake physics.
+protocol v5, then answers reset and step requests with simple fake physics.
 no real engine, no graphics. runs in-process on a thread so a test can tell
 it to hang or die.
 
 it mirrors the bits of GameManager/DataManager/SharedMemory the python side
 leans on: the learner is team 1, obs is 14 floats in the learner frame, a goal
 sets done=1 and scorer, the step/reset flags are cleared when the turn is done,
-and each step reports a fake turn length in game seconds. it does NOT copy the
-real jolt physics; positions just drift toward the ball so an episode ends in a
-handful of turns.
+each step reports a fake turn length in game seconds, a random-start reset
+(byte 91) scatters the fake bodies, and an out-of-bounds turn sets the oob flag
+(byte 117). It does NOT copy the real jolt physics; positions just drift toward
+the ball so an episode ends in a handful of turns.
 """
 import os
 import struct
@@ -18,7 +19,7 @@ import time
 
 import numpy as np
 
-# same layout as bobble_model/shared_memory_link.py (protocol v4, 124 bytes)
+# same layout as bobble_model/shared_memory_link.py (protocol v5, 124 bytes)
 OBS_OFFSET = 0
 ACT_OFFSET = 56
 REWARD_OFFSET = 80
@@ -29,12 +30,14 @@ LEARNER_TEAM_OFFSET = 87
 SCORER_OFFSET = 88
 PLAY_MODE_OFFSET = 89
 OPP_VALID_OFFSET = 90
+RANDOM_START_OFFSET = 91
 OPP_ACT_OFFSET = 92
 VERSION_OFFSET = 116
+OOB_RESET_OFFSET = 117
 TURN_SECONDS_OFFSET = 120
 TOTAL_SIZE = 124
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 OBS_DIM = 14
 ACT_DIM = 6
 
@@ -43,7 +46,7 @@ class Mock_godot:
     """
     Docstring for Mock_godot:
 
-    A tiny stand-in for the Godot game, talking protocol v4 over a file-backed
+    A tiny stand-in for the Godot game, talking protocol v5 over a file-backed
     mmap. Start it (creates the file), then attach Shared_memory_link(path=...,
     create=False) in the test. Call stop() when done.
 
@@ -75,6 +78,9 @@ class Mock_godot:
         self._hang = False
         self._stop = False
         self._turn = 0
+        # how many random-start resets this mock has served (byte 91 set), so a
+        # test can assert the flag flowed python -> godot
+        self.random_start_count = 0
         self._ball = np.zeros(2, dtype=np.float32)
         self._friendly = self.rng.uniform(-5, 5, size=(3, 2)).astype(np.float32)
         self._enemy = self.rng.uniform(-5, 5, size=(3, 2)).astype(np.float32)
@@ -157,11 +163,20 @@ class Mock_godot:
             # a reset request wins over a step, same as GameManager
             if self.buf[RESET_REQ_OFFSET] == 1:
                 self._turn = 0
-                self._ball = np.zeros(2, dtype=np.float32)
+                random_start = self.buf[RANDOM_START_OFFSET] == 1
+                if random_start:
+                    # scatter the fake bodies to random legal spots, like SpawnRandom
+                    self.random_start_count += 1
+                    self._ball = self.rng.uniform(-8, 8, size=2).astype(np.float32)
+                    self._friendly = self.rng.uniform(-8, 8, size=(3, 2)).astype(np.float32)
+                    self._enemy = self.rng.uniform(-8, 8, size=(3, 2)).astype(np.float32)
+                else:
+                    self._ball = np.zeros(2, dtype=np.float32)
                 self._write_obs()
                 self.buf[REWARD_OFFSET:REWARD_OFFSET + 4] = struct.pack("<f", 0.0)
                 self.buf[DONE_OFFSET] = 0
                 self.buf[SCORER_OFFSET] = 0
+                self.buf[OOB_RESET_OFFSET] = 0
                 self.buf[LEARNER_TEAM_OFFSET] = self.learner_team
                 self.buf[PLAY_MODE_OFFSET] = self.play_mode
                 self.buf[RESET_REQ_OFFSET] = 0
@@ -195,6 +210,7 @@ class Mock_godot:
                 self.buf[REWARD_OFFSET:REWARD_OFFSET + 4] = struct.pack("<f", reward)
                 self.buf[DONE_OFFSET] = 1 if done else 0
                 self.buf[SCORER_OFFSET] = scorer
+                self.buf[OOB_RESET_OFFSET] = 0
                 self.buf[LEARNER_TEAM_OFFSET] = self.learner_team
                 self.buf[PLAY_MODE_OFFSET] = self.play_mode
                 # fake turn length in game seconds: a small spread so the

@@ -90,6 +90,70 @@ class Running_mean_std:
         self.count = float(state.get("count", 1e-4))
 
 
+class RewardScaler:
+    """
+    Docstring for RewardScaler class:
+
+    Scale rewards by a running std of the DISCOUNTED RETURN (Phase 12, step 4;
+    "37 PPO details", https://iclr-blog-track.github.io/2022/03/25/
+    ppo-implementation-details/). It keeps a running estimate R_t = gamma*R_{t-1}
+    + r_t of the per-step discounted return and tracks the std of that stream with
+    a Running_mean_std; each reward is then divided by that std (mean NOT
+    subtracted, so a positive reward stays positive). This keeps the reward
+    magnitude ~unit-scale however the shaping and goal rewards combine, which steadies
+    the value targets and the advantages.
+
+    One running return per game is kept (games run in parallel and their streams
+    are independent), reset to 0 when that game's episode ends. The std stats are
+    saved in the checkpoint so a resumed run scales on the same basis; an old save
+    with no stats loads as the identity (std ~1, i.e. no scaling) and re-learns.
+    """
+
+    def __init__(self, n_games=1, gamma=0.99, epsilon=1e-8):
+        self.gamma = float(gamma)
+        self.epsilon = float(epsilon)
+        self.ret_rms = Running_mean_std()
+        self._returns = np.zeros(int(n_games), dtype=np.float64)
+
+    def scale(self, rewards, dones):
+        """
+        Update the running discounted-return std from this step's rewards and
+        return the SCALED rewards. rewards/dones are length-n_games arrays. A game
+        whose episode ended (done True) has its running return reset to 0 AFTER
+        this step, like the standard implementation.
+        """
+        rewards = np.asarray(rewards, dtype=np.float64).reshape(-1)
+        dones = np.asarray(dones, dtype=bool).reshape(-1)
+        if self._returns.shape[0] != rewards.shape[0]:
+            self._returns = np.zeros(rewards.shape[0], dtype=np.float64)
+        self._returns = self.gamma * self._returns + rewards
+        self.ret_rms.update(self._returns)
+        # cold start: with only a handful of samples the running variance is not a
+        # reliable scale and can be tiny, which would blow rewards up. Pass rewards
+        # through until enough have been seen, then scale by the std.
+        if self.ret_rms.count < 100.0:
+            scaled = rewards
+        else:
+            std = np.sqrt(self.ret_rms.var) + self.epsilon
+            scaled = rewards / std
+        # reset the running return where the episode ended
+        self._returns[dones] = 0.0
+        return scaled.astype(np.float32)
+
+    def state(self):
+        """Plain dict for the checkpoint (just the return stats; the per-game
+        running returns are transient and not saved)."""
+        return {"ret_rms": self.ret_rms.state(), "gamma": self.gamma}
+
+    def load_state(self, state):
+        """Restore the return stats. A None / empty state leaves the identity
+        (std ~1 = no scaling), so an old save loads and re-learns the scale."""
+        if not state:
+            return
+        self.ret_rms.load_state(state.get("ret_rms"))
+        self.gamma = float(state.get("gamma", self.gamma))
+
+
 def ortho_init(layer, gain):
     """
     Docstring for ortho_init
@@ -101,6 +165,74 @@ def ortho_init(layer, gain):
     nn.init.orthogonal_(layer.weight, gain)
     nn.init.zeros_(layer.bias)
     return layer
+
+
+class Input_norm(nn.Module):
+    """
+    Docstring for Input_norm class:
+
+    Running per-dimension normalization of the 14-value observation (Phase 12,
+    step 2). On top of the fixed OBS_SCALE clip the env already applies, the
+    network subtracts a running mean and divides by a running std learned from the
+    observations it actually sees, so every input dimension reaches the net at
+    ~unit scale however the fixed scaling leaves it (37 PPO details,
+    https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/).
+
+    The stats live as registered BUFFERS (mean, var, count), so they travel inside
+    the network's state_dict automatically: every checkpoint carries them, every
+    consumer that loads the weights (eval, opponents, live Elo) gets them for free,
+    and a resume restores them. A save written before this phase has no obs-norm
+    buffers; load_state_dict(strict=False) then leaves the fresh identity stats
+    (mean 0, var 1), which is the identity transform, so an old save still loads
+    and the run just re-learns the input scale.
+
+    update() is called ONLY in training (once per batch, from the training loop),
+    with Welford's parallel merge per dimension so it stays stable over a run. At
+    eval the module is never updated, so the stats are frozen (the plan's "frozen
+    at eval time"). forward() always just normalizes with the current buffers.
+    """
+
+    def __init__(self, dim=14, epsilon=1e-4, clip=5.0):
+        super().__init__()
+        self.register_buffer("mean", torch.zeros(dim, dtype=torch.float32))
+        self.register_buffer("var", torch.ones(dim, dtype=torch.float32))
+        # a tiny starting count (not 0) so the first parallel merge has a defined
+        # denominator; stored as a buffer so it survives save/load.
+        self.register_buffer("count", torch.tensor(float(epsilon), dtype=torch.float32))
+        self.clip = float(clip)
+
+    @torch.no_grad()
+    def update(self, x):
+        """Fold a batch of observations (N, dim) into the running stats with a
+        per-dimension Welford parallel merge. Training only."""
+        x = torch.as_tensor(x, dtype=torch.float32)
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
+        if x.shape[0] == 0:
+            return
+        batch_mean = x.mean(dim=0)
+        batch_var = x.var(dim=0, unbiased=False)
+        batch_count = float(x.shape[0])
+
+        delta = batch_mean - self.mean
+        total = self.count + batch_count
+        new_mean = self.mean + delta * batch_count / total
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m2 = m_a + m_b + delta * delta * self.count * batch_count / total
+        self.mean.copy_(new_mean)
+        self.var.copy_(m2 / total)
+        self.count.copy_(total)
+
+    def forward(self, x):
+        """Normalize: (x - mean) / sqrt(var), clipped. No grad flows to the stats
+        (they are buffers), so this is a fixed transform for the optimizer."""
+        std = torch.sqrt(self.var + 1e-8)
+        out = (x - self.mean) / std
+        if self.clip is not None:
+            out = torch.clamp(out, -self.clip, self.clip)
+        return out
+
 
 def neural_network(sizes, activation = nn.Tanh, hidden_gain=None, out_gain=None,
                    use_layernorm=False):
@@ -153,7 +285,8 @@ class Actor_critic_neural_network(nn.Module):
         :param act_dim: Size of the action vector
         :param hidden: List defining hidden layers in neural network
         """
-    def __init__(self, obs_dim=14, act_dim=6, hidden=[256, 256], use_layernorm=False):
+    def __init__(self, obs_dim=14, act_dim=6, hidden=[256, 256], use_layernorm=False,
+                 input_norm=False):
         super().__init__()
 
         # orthogonal init (PPO default): sqrt(2) on the hidden layers, a small 0.01
@@ -161,6 +294,13 @@ class Actor_critic_neural_network(nn.Module):
         # 1.0 on the value head. use_layernorm adds a LayerNorm after each hidden
         # layer (Phase 11, step 5) and changes the saved weight shape.
         self.use_layernorm = use_layernorm
+        # Phase 12, step 2: a single shared running input-normalizer applied to the
+        # obs before BOTH heads. It is a submodule, so its buffers travel in the
+        # state_dict; input_norm=False builds it anyway (as the identity) so the
+        # state_dict keys are stable, but the training loop only update()s it when
+        # input_norm is on. Kept shared so pi_net and v_net see the same scaling.
+        self.input_norm = input_norm
+        self.obs_norm = Input_norm(dim=obs_dim)
         root_two = float(np.sqrt(2))
         self.pi_net = neural_network([obs_dim] + hidden + [act_dim],
                                      hidden_gain=root_two, out_gain=0.01,
@@ -169,7 +309,13 @@ class Actor_critic_neural_network(nn.Module):
                                     hidden_gain=root_two, out_gain=1.0,
                                     use_layernorm=use_layernorm)
         self.log_std = nn.Parameter(INIT_LOG_STD * torch.ones(act_dim))
-    
+
+    def norm_obs(self, obs):
+        """Apply the shared running input-normalizer (Phase 12, step 2). A fixed
+        transform (the stats are buffers); call it on every obs before pi_net /
+        v_net so direct callers (kl_to_teacher, PolicyOpponent) match forward()."""
+        return self.obs_norm(obs)
+
     def forward(self, obs):
         """
         Docstring for forward
@@ -181,6 +327,7 @@ class Actor_critic_neural_network(nn.Module):
         :return value: Value estimate
         """
 
+        obs = self.obs_norm(obs)
         mu = self.pi_net(obs)
         std = self.log_std.exp()
         dist = Normal(mu, std)
@@ -213,6 +360,7 @@ class Actor_critic_neural_network(nn.Module):
         with torch.no_grad():
             device = next(self.parameters()).device
             obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=device)
+            obs_tensor = self.obs_norm(obs_tensor)
 
             mu = self.pi_net(obs_tensor)
             
@@ -224,3 +372,27 @@ class Actor_critic_neural_network(nn.Module):
                 action = dist.sample()
 
             return action
+
+
+def load_model_state(ac, state_dict):
+    """
+    Load a saved model state into an Actor_critic_neural_network, tolerating a
+    PRE-Phase-12 save that has no input-normalizer buffers (Phase 12, step 2).
+
+    A save written before the obs-norm submodule existed is missing the
+    `obs_norm.mean/var/count` keys; loading it strict would crash. We load with
+    strict=False and then check that the ONLY difference is those obs-norm
+    buffers (any other missing/unexpected key is a real mismatch and is
+    re-raised). When the buffers are absent the net keeps its fresh identity
+    stats, so an old save loads and the run re-learns the input scale.
+    """
+    result = ac.load_state_dict(state_dict, strict=False)
+    allowed_prefix = "obs_norm."
+    bad_missing = [k for k in result.missing_keys if not k.startswith(allowed_prefix)]
+    bad_unexpected = [k for k in result.unexpected_keys if not k.startswith(allowed_prefix)]
+    if bad_missing or bad_unexpected:
+        raise RuntimeError(
+            f"state_dict does not fit this network. missing={bad_missing} "
+            f"unexpected={bad_unexpected}"
+        )
+    return ac

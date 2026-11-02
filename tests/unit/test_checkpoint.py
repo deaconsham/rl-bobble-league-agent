@@ -124,6 +124,27 @@ def test_new_checkpoint_loads_through_both_paths(tmp_path):
     ac2.load_state_dict(sd)
 
 
+def test_prior_protocol_checkpoint_still_loads(tmp_path):
+    """Regression (Phase 12): bumping the protocol to v5 (random-start / OOB flags)
+    must NOT invalidate a checkpoint tagged with an earlier angle+power protocol
+    (v3/v4). The action/obs contract is unchanged across those bumps, so a v4 save
+    like best_p11_ln.pt loads through both the resume and eval loaders."""
+    from opponents import load_state_dict as opp_load
+    from training_loop import MIN_ACTION_FORMAT
+
+    assert MIN_ACTION_FORMAT == 3
+    ac, pi_opt, vf_opt = make_ac_and_opts()
+    # a save tagged action_format 4, as Phase 11 wrote under protocol v4
+    v4 = str(tmp_path / "v4.pt")
+    torch.save({"model": ac.state_dict(), "epoch": 80, "lr_step": 80,
+                "action_format": 4}, v4)
+    # both loaders accept it under the current v5 protocol
+    assert load_checkpoint(v4)["action_format"] == 4
+    sd = opp_load(v4)
+    ac2, _, _ = make_ac_and_opts()
+    ac2.load_state_dict(sd)
+
+
 def test_pool_round_trip_empty(tmp_path):
     """resume with a pool of 0 copies: no snapshots saved, loads back empty."""
     ac, pi_opt, vf_opt = make_ac_and_opts()

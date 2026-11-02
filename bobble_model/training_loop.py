@@ -4,12 +4,19 @@ import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
-from neural_network import Actor_critic_neural_network, INIT_LOG_STD, Running_mean_std
+from neural_network import Actor_critic_neural_network, INIT_LOG_STD, Running_mean_std, load_model_state, RewardScaler
 from shared_memory_link import Shared_memory_link
 
-# the action meaning is tied to the wire protocol, so tag checkpoints with the
-# same version. an old save (pre angle+power) has no tag and is refused on load.
+# the ACTION / OBS contract (angle+power, 6-number action, 14-value obs) last
+# changed in Phase 2 (protocol v3). Checkpoints are tagged with the action format
+# so a truly pre-angle+power save is refused, but LATER protocol bumps that only
+# add side-channel flags (v4 turn-length telemetry, v5 random-start / OOB flags)
+# leave the action/obs contract UNCHANGED, so they must NOT invalidate a saved
+# policy. Hence the tag is pinned to the era it belongs to, not the live protocol
+# version: new saves are tagged ACTION_FORMAT_VERSION, and any save at or above
+# MIN_ACTION_FORMAT (the angle+power era) loads.
 ACTION_FORMAT_VERSION = Shared_memory_link.PROTOCOL_VERSION
+MIN_ACTION_FORMAT = 3
 
 def get_device(device=None):
     """
@@ -403,19 +410,23 @@ def set_rng_state(state):
 
 
 def save_checkpoint(path, ac, pi_optimizer, vf_optimizer, epoch, lr_step,
-                    opponent=None, save_rng=True, value_norm=None):
+                    opponent=None, save_rng=True, value_norm=None, reward_scaler=None):
     """
     Docstring for save_checkpoint:
 
     Write a FULL checkpoint so a crashed run resumes exactly: the network weights,
     both optimizer states, the LR schedule step, the epoch, the self-play pool
-    (snapshot weights + win rates) when the opponent is a pool, the RNG state, and
-    the value-normalizer stats (Phase 11, step 1) when one is given.
+    (snapshot weights + win rates) when the opponent is a pool, the RNG state, the
+    value-normalizer stats (Phase 11, step 1) and the reward-scale stats (Phase 12,
+    step 4) when they are given.
 
     'model' stays a plain state_dict at the top so load_state_dict in opponents.py
     (which unwraps {'model': ...}) keeps working for eval and as a frozen opponent.
-    The value-norm stats live under their OWN top-level key, not inside 'model', so
-    the eval loader never sees them and a save without them still loads.
+    The input-normalizer stats (Phase 12, step 2) ride inside 'model' as the
+    obs_norm.* buffers, so every consumer that loads the weights gets them. The
+    value-norm and reward-scale stats live under their OWN top-level keys, not
+    inside 'model', so the eval loader never sees them and a save without them
+    still loads.
     """
     from opponents import SelfPlayPool
 
@@ -434,6 +445,8 @@ def save_checkpoint(path, ac, pi_optimizer, vf_optimizer, epoch, lr_step,
         ckpt['pool'] = opponent.state()
     if value_norm is not None:
         ckpt['value_norm'] = value_norm.state()
+    if reward_scaler is not None:
+        ckpt['reward_scale'] = reward_scaler.state()
     if save_rng:
         ckpt['rng'] = rng_state()
     tmp = f'{path}.tmp'
@@ -454,10 +467,11 @@ def load_checkpoint(path, map_location='cpu'):
             f"old checkpoints no longer apply, train a fresh run."
         )
     found = ckpt.get('action_format')
-    if found != ACTION_FORMAT_VERSION:
+    if not isinstance(found, int) or found < MIN_ACTION_FORMAT:
         raise ValueError(
-            f"'{path}' is action_format {found!r}, expected {ACTION_FORMAT_VERSION} "
-            f"(angle+power). Old checkpoints no longer apply, train a fresh run."
+            f"'{path}' is action_format {found!r}, expected >= {MIN_ACTION_FORMAT} "
+            f"(angle+power). Pre-angle+power checkpoints no longer apply, train a "
+            f"fresh run."
         )
     return ckpt
 
@@ -539,7 +553,8 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
               live_elo_sigma=0.1, best_path='checkpoints/best.pt',
               n_passes_v=None, value_norm=False, n_minibatches=None,
               kl_warm_start=None, kl_coef=0.0, kl_fade_fraction=0.5,
-              use_layernorm=False, weight_decay=0.0):
+              use_layernorm=False, weight_decay=0.0, input_norm=False,
+              random_start_prob=0.0, reward_scale=False, potential_shaping=False):
     """
     Docstring for ppo_train:
 
@@ -602,10 +617,14 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         from bobble_league_env import Vector_env
         env = Vector_env(n_games, launcher=launcher, opponents=opponents,
                          reward_config=reward_config, max_ep_len=max_ep_len,
-                         step_timeout=step_timeout, auto_launch=launcher is not None)
+                         step_timeout=step_timeout, auto_launch=launcher is not None,
+                         random_start_prob=random_start_prob, gamma=gamma,
+                         potential_shaping=potential_shaping)
     else:
         single = env_fn(opponent=opponents[0], reward_config=reward_config,
-                        max_ep_len=max_ep_len, step_timeout=step_timeout)
+                        max_ep_len=max_ep_len, step_timeout=step_timeout,
+                        random_start_prob=random_start_prob, gamma=gamma,
+                        potential_shaping=potential_shaping)
         env = _Single_env_as_vector(single)
 
     obs_dim = env.observation_space.shape[0]
@@ -616,6 +635,10 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     # value_norm arrives as a bool flag; turn it into a Running_mean_std object (or
     # None) so the rest of the loop can test `if value_norm is not None`.
     value_norm = Running_mean_std() if value_norm else None
+    # reward scaling by the running std of the discounted return (Phase 12,
+    # step 4). None turns it off; value_norm already scales the value TARGETS, so
+    # this is kept optional and off by default to avoid double-scaling.
+    reward_scaler = RewardScaler(n_games=n_games, gamma=gamma) if reward_scale else None
     # critic passes default to the policy passes when not split (Phase 11, step 2).
     if n_passes_v is None:
         n_passes_v = n_passes
@@ -625,6 +648,7 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     # with it on must start from a warm start rebuilt with it on.
     ac_kwargs = dict(ac_kwargs)
     ac_kwargs.setdefault('use_layernorm', use_layernorm)
+    ac_kwargs.setdefault('input_norm', input_norm)
     ac = actor_critic(obs_dim=obs_dim, act_dim=act_dim, **ac_kwargs)
     ac.to(device)
     # weight_decay (~1e-4) is Phase 11 step 5's small decay, paired with LayerNorm.
@@ -641,7 +665,7 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     resumed_lr_step = 0
     if resume:
         ckpt = load_checkpoint(resume, map_location=device)
-        ac.load_state_dict(ckpt['model'])
+        load_model_state(ac, ckpt['model'])
         if 'pi_optimizer' in ckpt:
             pi_optimizer.load_state_dict(ckpt['pi_optimizer'])
         if 'vf_optimizer' in ckpt:
@@ -653,13 +677,17 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         # going and just re-learns the scale instead of crashing.
         if value_norm is not None:
             value_norm.load_state(ckpt.get('value_norm'))
+        # reward-scale stats (Phase 12, step 4): same graceful rule, an old save
+        # with no 'reward_scale' key loads as the identity (no scaling).
+        if reward_scaler is not None:
+            reward_scaler.load_state(ckpt.get('reward_scale'))
         set_rng_state(ckpt.get('rng'))
         start_epoch = int(ckpt.get('epoch', -1)) + 1
         resumed_lr_step = int(ckpt.get('lr_step', start_epoch))
         print(f'Resumed from {resume} at epoch {start_epoch} (lr_step {resumed_lr_step})')
     elif init_checkpoint:
         from opponents import load_state_dict
-        ac.load_state_dict(load_state_dict(init_checkpoint))
+        load_model_state(ac, load_state_dict(init_checkpoint))
         # log_std is saved in every checkpoint, so an --init save carries whatever
         # spread it was trained with (an old ppo_epoch save is sigma ~0.6). reset
         # it to the small start value so a fresh run begins with the intended tight
@@ -685,7 +713,7 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
     if kl_warm_start:
         from opponents import load_state_dict
         kl_teacher = actor_critic(obs_dim=obs_dim, act_dim=act_dim, **ac_kwargs)
-        kl_teacher.load_state_dict(load_state_dict(kl_warm_start))
+        load_model_state(kl_teacher, load_state_dict(kl_warm_start))
         kl_teacher.to(device)
         kl_teacher.eval()
         for p in kl_teacher.parameters():
@@ -752,10 +780,10 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         if decision['became_best']:
             save_checkpoint(best_path, ac, pi_optimizer, vf_optimizer, epoch,
                             lr_step=lr_schedule.step_count, opponent=shared_pool,
-                            value_norm=value_norm)
+                            value_norm=value_norm, reward_scaler=reward_scaler)
         if decision['rollback']:
             from opponents import load_state_dict as _load
-            ac.load_state_dict(_load(best_path))
+            load_model_state(ac, _load(best_path))
             with torch.no_grad():
                 ac.log_std.fill_(float(INIT_LOG_STD))
 
@@ -803,8 +831,20 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
 
             next_o, r, terminated, truncated, step_infos = env.step(a_np)
 
+            # Phase 12, step 4: scale the training rewards by the running std of
+            # the discounted return. ep_ret / win-loss accounting below stay on the
+            # RAW reward r; only what is stored for training is scaled. The episode
+            # boundary (term or trunc) resets each game's running return.
+            if reward_scaler is not None:
+                done_now = np.logical_or(np.asarray(terminated, dtype=bool),
+                                         np.asarray(truncated, dtype=bool))
+                r_train = reward_scaler.scale(r, done_now)
+                rs_std = float(np.sqrt(reward_scaler.ret_rms.var) + reward_scaler.epsilon)
+            else:
+                r_train = r
+
             for g in range(n_games):
-                buffers[g].store(o[g], a_np[g], r[g], float(v_np[g]), float(logp_np[g]))
+                buffers[g].store(o[g], a_np[g], r_train[g], float(v_np[g]), float(logp_np[g]))
                 ep_ret[g] += r[g]
                 ep_len[g] += 1
                 # turn length (game seconds); real Godot sends simTime, mocks a small spread
@@ -818,7 +858,12 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
                     opp_val = opp['val']
                     if value_norm is not None:
                         opp_val = float(value_norm.denormalize(opp_val))
-                    opp_buffers[g].store(opp['obs'], opp['act'], opp['reward'],
+                    # scale Team B's reward by the same running std (step 4), so
+                    # both sides train on the same reward magnitude.
+                    opp_reward = opp['reward']
+                    if reward_scaler is not None:
+                        opp_reward = float(opp_reward) / rs_std
+                    opp_buffers[g].store(opp['obs'], opp['act'], opp_reward,
                                          opp_val, opp['logp'])
                     opp_turns_stored += 1
 
@@ -861,6 +906,13 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         # normalize advantages over the whole batch, update
         opp_data = [buf.get(device=device) for buf in opp_buffers if len(buf) > 0]
         data = join_and_normalize(buffers, device=device, extra_data=opp_data)
+
+        # Phase 12, step 2: fold this batch's observations into the running input
+        # normalizer BEFORE the update, so the net trains on the current scale. It
+        # is frozen at eval (never updated there). Done once per epoch over the
+        # whole batch (learner + opponent rows), matching value_norm's cadence.
+        if getattr(ac, 'input_norm', False):
+            ac.obs_norm.update(data['obs'])
 
         # KL-to-warm-start weight for this epoch: starts at kl_coef and fades
         # linearly to 0 over the first `kl_fade_fraction` of the run, then stays 0
@@ -941,7 +993,8 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
             os.makedirs('checkpoints', exist_ok=True)
             save_checkpoint(f'checkpoints/ppo_epoch_{epoch}.pt', ac, pi_optimizer,
                             vf_optimizer, epoch, lr_step=lr_schedule.step_count,
-                            opponent=shared_pool, value_norm=value_norm)
+                            opponent=shared_pool, value_norm=value_norm,
+                            reward_scaler=reward_scaler)
             print(f'Model saved at epoch {epoch}')
 
         # live Elo + best.pt + roll-back, on its own cadence (Phase 10, steps 5-7)
@@ -970,9 +1023,9 @@ def kl_to_teacher(ac, teacher, obs):
     Returns a scalar tensor (mean over the batch), differentiable through the
     learner's mean. The teacher is evaluated under no_grad.
     """
-    mu_learner = ac.pi_net(obs)
+    mu_learner = ac.pi_net(ac.norm_obs(obs))
     with torch.no_grad():
-        mu_teacher = teacher.pi_net(obs)
+        mu_teacher = teacher.pi_net(teacher.norm_obs(obs))
     var = ac.log_std.exp().pow(2)
     per_dim = 0.5 * (mu_learner - mu_teacher).pow(2) / var
     return per_dim.sum(dim=-1).mean()
@@ -1178,6 +1231,23 @@ if __name__ == '__main__':
                              'needs a warm start rebuilt with it on)')
     parser.add_argument('--weight-decay', type=float, default=0.0,
                         help='Adam weight decay for both nets (step 5 pairs ~1e-4 with LayerNorm)')
+    # ---- phase 12: better data and rewards ----
+    parser.add_argument('--input-norm', action='store_true',
+                        help='normalize observations with a running mean/std inside the net, '
+                             'frozen at eval, saved in checkpoints (step 2)')
+    parser.add_argument('--random-start-prob', type=float, default=0.0,
+                        help='fraction of env resets that start from a random legal layout '
+                             'instead of kickoff (step 1); default 0.0 = always kickoff '
+                             '(Phase 11 config). 0.3 was the Phase 12 experiment value.')
+    parser.add_argument('--reward-scale', action='store_true',
+                        help='scale rewards by the running std of the discounted return, '
+                             'saved in checkpoints (step 4). Default off: value-norm already '
+                             'scales value targets, so enabling both double-scales.')
+    parser.add_argument('--potential-shaping', action='store_true',
+                        help='use exact potential-based shaping gamma*phi(s*)-phi(s) with '
+                             'phi=0 at a goal and an OOB skip (step 3). Default off keeps the '
+                             'Phase 11 shaping, so a plain launch reproduces Phase 11 (the '
+                             'potential form was a T5 miss in Phase 12).')
     args = parser.parse_args()
 
     launcher = None
@@ -1220,4 +1290,8 @@ if __name__ == '__main__':
               kl_coef=args.kl_coef,
               kl_fade_fraction=args.kl_fade_fraction,
               use_layernorm=args.use_layernorm,
-              weight_decay=args.weight_decay)
+              weight_decay=args.weight_decay,
+              input_norm=args.input_norm,
+              random_start_prob=args.random_start_prob,
+              reward_scale=args.reward_scale,
+              potential_shaping=args.potential_shaping)

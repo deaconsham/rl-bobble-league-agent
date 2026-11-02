@@ -62,6 +62,12 @@ public partial class GameManager : Node
     float stepReward;
     bool currentDone;
     int lastScorer; // 0 nobody, 1 learner, 2 opponent
+    bool turnHitOob; // this turn went out of bounds and was kicked back to centre
+
+    // Phase 12, step 1: random-start layouts. seeded per process so parallel
+    // Godots do not all scatter to the same board; python decides WHICH resets
+    // are random (byte 91), Godot decides the positions.
+    readonly RandomNumberGenerator rng = new RandomNumberGenerator();
 
     // the team the AI plays, python always sees the game from this team's side
     int LearnerTeam => CurrentPlayMode == PlayMode.HUMAN_VS_AI ? 2 : 1;
@@ -72,6 +78,7 @@ public partial class GameManager : Node
     }
 
     public override void _Ready() {
+        rng.Randomize();
         ReadCommandLine();
         ApplyStopSpeed();
         if (CurrentPlayMode == PlayMode.AI_VS_AI && AIvsAITimeScale > 1f) {
@@ -270,13 +277,26 @@ public partial class GameManager : Node
     }
 
     void Reset() {
+        Reset(false);
+    }
+
+    // randomStart (Phase 12, step 1): scatter the ball and all six players to a
+    // random legal non-overlapping layout instead of kickoff, so the AI also sees
+    // odd boards (defending near its own goal, a scramble). A goal reset and an
+    // out-of-bounds reset always use kickoff (randomStart false); only a
+    // python-requested env reset with byte 91 set scatters.
+    void Reset(bool randomStart) {
         foreach (Node node in players.GetChildren()) {
             node.Free();
         }
         ball.AngularVelocity = Vector3.Zero;
         ball.LinearVelocity = Vector3.Zero;
-        ball.Position = new Vector3(0, 0.5f, 0);
-        Spawn();
+        if (randomStart) {
+            SpawnRandom();
+        } else {
+            ball.Position = new Vector3(0, 0.5f, 0);
+            Spawn();
+        }
     }
 
     void Spawn() {
@@ -293,6 +313,67 @@ public partial class GameManager : Node
             
             players.AddChild(player);
         }
+    }
+
+    // random legal non-overlapping layout: the ball plus one player per spawn
+    // (keeping each spawn's team), placed inside a margin of the pitch so nothing
+    // starts in a wall or a goal, and no two bodies start closer than MinSpawnGap.
+    void SpawnRandom() {
+        List<Vector3> placed = new List<Vector3>();
+        Vector3 ballXZ = SampleFreeSpot(placed);
+        ball.Position = new Vector3(ballXZ.X, 0.5f, ballXZ.Z);
+        placed.Add(ballXZ);
+
+        foreach (PlayerSpawn spawn in spawns.GetChildren()) {
+            Player player = PlayerPrefab.Instantiate<Player>();
+            Vector3 spot = SampleFreeSpot(placed);
+            player.Position = new Vector3(spot.X, 1.001f, spot.Z);
+            placed.Add(spot);
+
+            MeshInstance3D mesh = player.GetChild(0) as MeshInstance3D;
+            if (spawn.Team == 1) mesh.SetSurfaceOverrideMaterial(0, TeamA);
+            else if (spawn.Team == 2) mesh.SetSurfaceOverrideMaterial(0, TeamB);
+
+            player.team = spawn.Team;
+            player.SetStopSpeed(StopSpeed);
+
+            players.AddChild(player);
+        }
+    }
+
+    // bodies start inside this margin of the walls / goal lines (world units), so
+    // a random layout never puts one in a wall or already in a goal mouth.
+    const float SpawnMarginX = 1.5f;
+    const float SpawnMarginZ = 2.5f;
+    // smallest allowed centre-to-centre gap between two started bodies (radii are
+    // ~0.5 each, so 2.0 leaves a clear gap and no start-of-turn overlap).
+    const float MinSpawnGap = 2.0f;
+
+    // rejection-sample a spot at least MinSpawnGap from every already-placed body.
+    // after many tries it returns the best (farthest-from-neighbours) candidate so
+    // a reset never hangs; with 7 bodies on this pitch a free spot is found fast.
+    Vector3 SampleFreeSpot(List<Vector3> placed) {
+        float xLimit = FieldHalfX - SpawnMarginX;
+        float zLimit = FieldHalfZ - SpawnMarginZ;
+        Vector3 best = Vector3.Zero;
+        float bestMinDist = -1f;
+        for (int attempt = 0; attempt < 100; attempt++) {
+            Vector3 cand = new Vector3(
+                rng.RandfRange(-xLimit, xLimit), 0f, rng.RandfRange(-zLimit, zLimit));
+            float minDist = float.MaxValue;
+            foreach (Vector3 p in placed) {
+                float d = new Vector2(cand.X - p.X, cand.Z - p.Z).Length();
+                if (d < minDist) minDist = d;
+            }
+            if (placed.Count == 0 || minDist >= MinSpawnGap) {
+                return cand;
+            }
+            if (minDist > bestMinDist) {
+                bestMinDist = minDist;
+                best = cand;
+            }
+        }
+        return best;
     }
     
     bool StationaryPlayers() {
@@ -326,6 +407,7 @@ public partial class GameManager : Node
             // something that leaves the pitch can never settle, so go back to kickoff (no reward)
             if (!currentDone && AnythingOutOfBounds()) {
                 GD.Print($"Turn {turn}: something left the pitch, back to kickoff");
+                turnHitOob = true;   // tell python to skip this turn's position shaping
                 Reset();
             }
             bool timedOut = simTime > MaxTurnSeconds;
@@ -333,10 +415,11 @@ public partial class GameManager : Node
             if (timedOut || (StationaryBall() && StationaryPlayers())) {
                 // only the goal reward (+1/-1/0) comes from here, python adds the shaping.
                 // simTime is how long the turn took to settle in game seconds.
-                dataManager.Export(currentDone, stepReward, false, LearnerTeam, lastScorer, (int)CurrentPlayMode, (float)simTime);
+                dataManager.Export(currentDone, stepReward, false, LearnerTeam, lastScorer, (int)CurrentPlayMode, (float)simTime, turnHitOob);
                 stepReward = 0;
                 currentDone = false;
                 lastScorer = 0;
+                turnHitOob = false;
                 isSimulating = false;
             }
             return;
@@ -346,10 +429,12 @@ public partial class GameManager : Node
 
         // handle resets before waiting on the human so env.reset() doesn't use up a right click
         if (dataManager.IsResetRequested()) {
-            Reset();
+            // v5: python may ask (byte 91) for a scattered random layout here
+            Reset(dataManager.IsRandomStartRequested());
             stepReward = 0;
             currentDone = false;
             lastScorer = 0;
+            turnHitOob = false;
             humanWaitingForAI = false;
             dataManager.Export(false, 0f, true, LearnerTeam, 0, (int)CurrentPlayMode);
             return;

@@ -12,7 +12,7 @@ import numpy as np
 import torch
 
 from bobble_league_env import encode_action, normalize_obs, split_obs, vector_to_action
-from neural_network import Actor_critic_neural_network
+from neural_network import Actor_critic_neural_network, load_model_state
 from shared_memory_link import Shared_memory_link
 
 
@@ -206,7 +206,9 @@ class PolicyOpponent:
                                                    hidden=list(hidden),
                                                    use_layernorm=wants_ln)
             self.net.eval()
-        self.net.load_state_dict(state_dict)
+        # tolerate a pre-Phase-12 snapshot with no input-norm buffers (Phase 12,
+        # step 2): load_model_state keeps the fresh identity stats then.
+        load_model_state(self.net, state_dict)
 
     def act(self, raw_obs):
         obs = normalize_obs(raw_obs)
@@ -215,7 +217,7 @@ class PolicyOpponent:
         # sample with a shrunk / fixed spread: mean + std * noise
         with torch.no_grad():
             obs_t = torch.as_tensor(obs, dtype=torch.float32)
-            mu = self.net.pi_net(obs_t)
+            mu = self.net.pi_net(self.net.norm_obs(obs_t))
             if self.abs_std is not None:
                 std = torch.full_like(mu, self.abs_std)
             else:
@@ -447,11 +449,16 @@ def load_state_dict(path, map_location="cpu"):
             f"old checkpoints no longer apply, train a fresh run."
         )
     found = ckpt.get("action_format")
-    if found != Shared_memory_link.PROTOCOL_VERSION:
+    # the action/obs contract is unchanged since the angle+power era (protocol v3);
+    # later protocol bumps (v4 telemetry, v5 random-start/OOB flags) only add
+    # side-channel flags, so any save at or above v3 loads. Only a truly
+    # pre-angle+power save (missing/low tag) is refused.
+    MIN_ACTION_FORMAT = 3
+    if not isinstance(found, int) or found < MIN_ACTION_FORMAT:
         raise ValueError(
-            f"'{path}' is action_format {found!r}, expected "
-            f"{Shared_memory_link.PROTOCOL_VERSION} (angle+power). Old checkpoints "
-            f"no longer apply, train a fresh run."
+            f"'{path}' is action_format {found!r}, expected >= {MIN_ACTION_FORMAT} "
+            f"(angle+power). Pre-angle+power checkpoints no longer apply, train a "
+            f"fresh run."
         )
     return ckpt["model"]
 

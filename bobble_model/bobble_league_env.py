@@ -152,15 +152,31 @@ def opponent_view(raw_obs):
 class RewardConfig:
     """
     Per-turn shaping added on top of Godot's goal reward (+1 / -1).
-    Positions only change between turns, so "velocity" here means
-    displacement over one turn. Distances are divided by FIELD_HALF_Z.
-    Set a weight to 0 to switch that term off.
+
+    Phase 12, step 3: the position terms are now EXACT potential-based shaping.
+    Each weight scales a term of a state potential phi(s) (see `potential` below),
+    and the per-turn shaping is F = gamma * phi(s') - phi(s), with phi = 0 at a
+    goal. In this form the shaping provably leaves the best policy unchanged (Ng,
+    Harada & Russell 1999), so it can nudge the AI toward the ball and goal early
+    without ever teaching "push the ball" instead of "score".
+
+    - ball_to_goal: potential rises as the ball nears the opponent goal.
+    - players_to_ball: potential rises as the friendly players close on the ball.
+    - defence: potential term, 0 when a friendly is goal-side of the ball and
+      -1 (times the weight) when none is. Turned into a potential so it too is
+      policy-invariant (set to 0 to drop it).
+    - time_penalty: a flat per-turn cost. This is NOT a potential (it is a real
+      cost that should change the policy toward faster goals), so it is added
+      outside the telescoping shaping, unchanged.
+
+    Distances are divided by FIELD_HALF_Z. Set a weight to 0 to switch that term
+    off.
     """
     goal: float = 1.0               # scales Godot's +-1
-    ball_to_goal: float = 0.5       # ball moved closer to the opponent goal
-    players_to_ball: float = 0.05   # friendly players closed in on the ball (mean)
-    defence: float = 0.02           # penalty when no friendly is goal-side of the ball
-    time_penalty: float = 0.0       # flat cost per turn, pushes for faster goals
+    ball_to_goal: float = 0.5       # potential: ball nearer the opponent goal
+    players_to_ball: float = 0.05   # potential: friendly players nearer the ball (mean)
+    defence: float = 0.02           # potential: friendly goal-side of the ball
+    time_penalty: float = 0.0       # flat cost per turn (not a potential)
 
     def scaled(self, frac):
         """
@@ -180,6 +196,64 @@ class RewardConfig:
             defence=self.defence * f,
             time_penalty=self.time_penalty * f,
         )
+
+
+def potential(raw_obs, cfg):
+    """
+    State potential phi(s) for the potential-based shaping (Phase 12, step 3).
+
+    phi is built from the learner-frame raw obs and the RewardConfig weights, so
+    the per-turn shaping F = gamma*phi(s') - phi(s) telescopes exactly. Each term
+    is HIGHER when the state is better for the learner, so a positive F means the
+    state improved:
+
+      - ball_to_goal: -w * d(ball, OPP_GOAL)/FIELD_HALF_Z  (nearer the enemy goal
+        is a smaller distance, so a less-negative, higher potential).
+      - players_to_ball: -w * mean(d(player, ball))/FIELD_HALF_Z.
+      - defence: 0 when at least one friendly is goal-side of the ball (z larger
+        than the ball, since the learner attacks -z and defends +z), else -w.
+
+    time_penalty is NOT in phi (it is a real per-turn cost, added outside the
+    telescoping shaping). Takes a raw (un-normalized) obs, same frame as _shaping.
+    """
+    ball, friendly, _ = split_obs(raw_obs)
+    phi = 0.0
+    if cfg.ball_to_goal:
+        phi += cfg.ball_to_goal * (-np.linalg.norm(ball - OPP_GOAL) / FIELD_HALF_Z)
+    if cfg.players_to_ball:
+        phi += cfg.players_to_ball * (-float(np.mean(np.linalg.norm(friendly - ball, axis=1))) / FIELD_HALF_Z)
+    if cfg.defence:
+        goal_side = np.any(friendly[:, 1] > ball[1])
+        phi += 0.0 if goal_side else -cfg.defence
+    return float(phi)
+
+
+def legacy_shaping(prev_raw, raw, cfg):
+    """
+    The Phase 11 (pre-Phase-12) shaping, kept as the DEFAULT when
+    `--potential-shaping` is off (Phase 12 evaluated the exact potential form and
+    it did not beat Phase 11 in T5, so it is no longer the default).
+
+    This is NOT exact potential-based shaping: it is the un-discounted distance
+    deltas `phi(s') - phi(s)` (no gamma), a flat per-state defence penalty, and
+    the flat time_penalty. It takes raw (un-normalized) obs, the learner's frame.
+    """
+    p_ball, p_friendly, _ = split_obs(prev_raw)
+    n_ball, n_friendly, _ = split_obs(raw)
+    r = 0.0
+    if cfg.ball_to_goal:
+        progress = np.linalg.norm(p_ball - OPP_GOAL) - np.linalg.norm(n_ball - OPP_GOAL)
+        r += cfg.ball_to_goal * progress / FIELD_HALF_Z
+    if cfg.players_to_ball:
+        before = np.linalg.norm(p_friendly - p_ball, axis=1)
+        after = np.linalg.norm(n_friendly - n_ball, axis=1)
+        r += cfg.players_to_ball * float(np.mean(before - after)) / FIELD_HALF_Z
+    if cfg.defence:
+        # learner attacks -z, so "goal-side" (between ball and own goal) = larger z
+        if not np.any(n_friendly[:, 1] > n_ball[1]):
+            r -= cfg.defence
+    r -= cfg.time_penalty
+    return float(r)
 
 
 def shaping_fade_fraction(epoch, total_epochs, fade_fraction=0.5):
@@ -227,7 +301,8 @@ class Bobble_league_env(gym.Env):
 
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, opponent=None, reward_config=None, max_ep_len=1000, step_timeout=120.0, bridge=None):
+    def __init__(self, opponent=None, reward_config=None, max_ep_len=1000, step_timeout=120.0,
+                 bridge=None, random_start_prob=0.0, gamma=0.99, potential_shaping=False):
         super().__init__()
 
         self.observation_space = gym.spaces.Box(-1.0, 1.0, shape=(14,), dtype=np.float32)
@@ -237,11 +312,27 @@ class Bobble_league_env(gym.Env):
         self.reward_config = reward_config or RewardConfig()
         self.max_ep_len = max_ep_len
         self.step_timeout = step_timeout
+        # discount used by the potential-based shaping F = gamma*phi(s') - phi(s)
+        # (Phase 12, step 3); must match the training loop's gamma so the shaping
+        # is policy-invariant (Ng, Harada & Russell 1999).
+        self.gamma = float(gamma)
+        # Phase 12, step 1: fraction of env resets that start from a random legal
+        # layout instead of kickoff, so the AI also sees odd boards (defending near
+        # its own goal, a scramble). 0.0 keeps every reset at kickoff.
+        self.random_start_prob = float(random_start_prob)
+        # Phase 12, step 3: when True, use exact potential-based shaping
+        # (gamma*phi(s')-phi(s), phi=0 at a goal, OOB skip). Default False keeps
+        # the Phase 11 shaping, so a plain launch reproduces Phase 11 (the
+        # potential form was a T5 miss). See legacy_shaping / _shaping.
+        self.potential_shaping = bool(potential_shaping)
 
         self.ep_len = 0
         self._raw_obs = None
         self.play_mode = None
         self.learner_team = None
+        # True on the turn right after an out-of-bounds / random reset, where the
+        # positions jump, so shaping (a difference between turns) is skipped there.
+        self._skip_shaping_next = False
 
         # Shared memory bridge (attach to the file Godot created)
         self.bridge = bridge or Shared_memory_link(create=False)
@@ -252,7 +343,11 @@ class Bobble_league_env(gym.Env):
         super().reset(seed=seed)
         self.ep_len = 0
 
-        self.bridge.request_reset()
+        # Phase 12, step 1: scatter this reset to a random legal layout with
+        # probability random_start_prob (Godot does the placement when byte 91 is
+        # set), otherwise a normal kickoff.
+        random_start = np.random.random() < self.random_start_prob
+        self.bridge.request_reset(random_start=random_start)
         self.bridge.wait_for_reset(self.step_timeout)
 
         self._raw_obs = self.bridge.read_observation()
@@ -290,40 +385,46 @@ class Bobble_league_env(gym.Env):
         terminated = self.bridge.read_done()
         scorer = self.bridge.read_scorer()
         turn_seconds = self.bridge.read_turn_seconds()
+        oob_reset = self.bridge.read_oob_reset()
         self._raw_obs = raw_obs
 
-        # On a goal Godot has already moved everyone back to kickoff,
-        # so the position terms would be meaningless for this turn.
-        shaping = 0.0 if terminated else self._shaping(prev_raw, raw_obs)
+        # potential-based shaping: phi is 0 at a goal, and the turn right after an
+        # out-of-bounds kickoff is skipped (the positions jumped, so a difference
+        # of potentials is meaningless there).
+        shaping = self._shaping(prev_raw, raw_obs, terminated=terminated, skip=oob_reset)
         reward = self.reward_config.goal * goal_reward + shaping
 
         truncated = (not terminated) and self.ep_len >= self.max_ep_len
         info = {"goal_reward": goal_reward, "shaping": shaping, "scorer": scorer,
-                "turn_seconds": float(turn_seconds)}
+                "turn_seconds": float(turn_seconds), "oob_reset": bool(oob_reset)}
         return normalize_obs(raw_obs), float(reward), bool(terminated), bool(truncated), info
 
     # ---- reward shaping ----
 
-    def _shaping(self, prev_raw, raw):
+    def _shaping(self, prev_raw, raw, terminated=False, skip=False):
+        """Per-turn shaping. Two forms, chosen by `self.potential_shaping`.
+
+        OFF (default, the Phase 11 form): the un-discounted distance deltas
+        `phi(s') - phi(s)` with a flat defence penalty, minus the flat
+        time_penalty. `terminated`/`skip` are ignored. A plain training launch
+        uses this, so it reproduces the Phase 11 recipe (Phase 12 evaluated the
+        potential form as a T5 miss, so it is no longer the default).
+
+        ON (`--potential-shaping`, Phase 12, step 3): exact potential-based
+        shaping F = gamma * phi(s') - phi(s), with phi = 0 at a goal
+        (`terminated`), plus the flat time_penalty (a real cost, outside the
+        telescoping sum). `skip` is True on the turn right after an out-of-bounds
+        kickoff, where the positions jump, so no shaping is applied there.
+        """
         cfg = self.reward_config
-        p_ball, p_friendly, _ = split_obs(prev_raw)
-        n_ball, n_friendly, _ = split_obs(raw)
-        r = 0.0
-
-        if cfg.ball_to_goal:
-            progress = np.linalg.norm(p_ball - OPP_GOAL) - np.linalg.norm(n_ball - OPP_GOAL)
-            r += cfg.ball_to_goal * progress / FIELD_HALF_Z
-
-        if cfg.players_to_ball:
-            before = np.linalg.norm(p_friendly - p_ball, axis=1)
-            after = np.linalg.norm(n_friendly - n_ball, axis=1)
-            r += cfg.players_to_ball * float(np.mean(before - after)) / FIELD_HALF_Z
-
-        if cfg.defence:
-            # learner attacks -z, so "goal-side" (between ball and own goal) = larger z
-            if not np.any(n_friendly[:, 1] > n_ball[1]):
-                r -= cfg.defence
-
+        if not getattr(self, 'potential_shaping', False):
+            return legacy_shaping(prev_raw, raw, cfg)
+        if skip:
+            return 0.0
+        phi_prev = potential(prev_raw, cfg)
+        # phi is 0 at a goal; otherwise it is the next state's potential.
+        phi_next = 0.0 if terminated else potential(raw, cfg)
+        r = self.gamma * phi_next - phi_prev
         r -= cfg.time_penalty
         return float(r)
 
@@ -373,13 +474,21 @@ class Vector_env:
 
     def __init__(self, n_games, bridges=None, launcher=None, opponents=None,
                  reward_config=None, max_ep_len=1000, step_timeout=120.0,
-                 auto_launch=False, restart_tries=3):
+                 auto_launch=False, restart_tries=3, random_start_prob=0.0, gamma=0.99,
+                 potential_shaping=False):
         self.n_games = n_games
         self.launcher = launcher
         self.reward_config = reward_config or RewardConfig()
         self.max_ep_len = max_ep_len
         self.step_timeout = step_timeout
         self.restart_tries = restart_tries
+        # Phase 12: potential-based shaping discount and the per-reset random-start
+        # probability (same meaning as the single env).
+        self.gamma = float(gamma)
+        self.random_start_prob = float(random_start_prob)
+        # Phase 12, step 3: exact potential-based shaping when True; default False
+        # keeps the Phase 11 shaping (see legacy_shaping / _shaping).
+        self.potential_shaping = bool(potential_shaping)
 
         self.observation_space = gym.spaces.Box(-1.0, 1.0, shape=(14,), dtype=np.float32)
         self.action_space = gym.spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32)
@@ -427,7 +536,8 @@ class Vector_env:
     def _reset_one(self, i):
         """Docstring for _reset_one: reset a single game, like the single env does."""
         self.ep_len[i] = 0
-        self.bridges[i].request_reset()
+        random_start = np.random.random() < self.random_start_prob
+        self.bridges[i].request_reset(random_start=random_start)
         self.bridges[i].wait_for_reset(self.step_timeout)
         self._raw_obs[i] = self.bridges[i].read_observation()
         self.play_mode[i] = self.bridges[i].read_play_mode()
@@ -540,18 +650,23 @@ class Vector_env:
         terminated = self.bridges[i].read_done()
         scorer = self.bridges[i].read_scorer()
         turn_seconds = self.bridges[i].read_turn_seconds()
+        oob_reset = self.bridges[i].read_oob_reset()
         self._raw_obs[i] = raw_obs
 
-        shaping = 0.0 if terminated else self._shaping(prev_raw, raw_obs)
+        # potential-based shaping: phi is 0 at a goal, and a turn that hit an
+        # out-of-bounds kickoff is skipped (the positions jumped).
+        shaping = self._shaping(prev_raw, raw_obs, terminated=terminated, skip=oob_reset)
         reward = self.reward_config.goal * goal_reward + shaping
         truncated = (not terminated) and self.ep_len[i] >= self.max_ep_len
         info = {"goal_reward": goal_reward, "shaping": shaping, "scorer": scorer,
-                "turn_seconds": float(turn_seconds), "restarted": False}
+                "turn_seconds": float(turn_seconds), "restarted": False,
+                "oob_reset": bool(oob_reset)}
 
         # live vs live: store Team B too, from its mirrored view. Team B's goal
         # reward is the negated learner reward, its shaping is computed in the
         # opponent frame (opponent_view flips z and swaps teams).
-        self._maybe_add_opponent_turn(i, info, prev_raw, raw_obs, goal_reward, terminated)
+        self._maybe_add_opponent_turn(i, info, prev_raw, raw_obs, goal_reward,
+                                      terminated, oob_reset)
 
         if terminated or truncated:
             self._maybe_record_pool_result(i, scorer if terminated else 0)
@@ -581,7 +696,7 @@ class Vector_env:
         opp = self.opponents[i]
         return opp is not None and getattr(opp, "is_live_current", None) is not None and opp.is_live_current()
 
-    def _maybe_add_opponent_turn(self, i, info, prev_raw, raw_obs, goal_reward, terminated):
+    def _maybe_add_opponent_turn(self, i, info, prev_raw, raw_obs, goal_reward, terminated, oob_reset=False):
         """
         Fill info['opponent'] with Team B's transition for a live-vs-live game, so
         the training loop can push it into the opponent-side buffer. The acting
@@ -596,10 +711,10 @@ class Vector_env:
         if last is None:
             return
         opp_goal_reward = -goal_reward  # a learner goal is Team B's loss, and vice versa
-        if terminated:
-            opp_shaping = 0.0
-        else:
-            opp_shaping = self._shaping(opponent_view(prev_raw), opponent_view(raw_obs))
+        # Team B's shaping is the same potential-based form in its mirrored frame,
+        # with the same terminal (phi=0) and out-of-bounds skip handling.
+        opp_shaping = self._shaping(opponent_view(prev_raw), opponent_view(raw_obs),
+                                    terminated=terminated, skip=oob_reset)
         opp_reward = self.reward_config.goal * opp_goal_reward + opp_shaping
         info["opponent"] = {
             "obs": last["obs"],
@@ -646,8 +761,9 @@ class Vector_env:
 
     # ---- reward shaping (same as the single env) ----
 
-    def _shaping(self, prev_raw, raw):
-        return Bobble_league_env._shaping(self, prev_raw, raw)
+    def _shaping(self, prev_raw, raw, terminated=False, skip=False):
+        return Bobble_league_env._shaping(self, prev_raw, raw,
+                                          terminated=terminated, skip=skip)
 
     def close(self):
         """Docstring for close: unmap every bridge and stop the games we launched."""

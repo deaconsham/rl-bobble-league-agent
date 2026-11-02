@@ -23,7 +23,7 @@ class Shared_memory_link:
     File-backed memory-map bridge between Godot and Python.
     Works on Windows, macOS and Linux (both sides map the same file).
 
-    Protocol v4 layout (124 bytes). Must match bobble_league/Scripts/SharedMemory.cs.
+    Protocol v5 layout (124 bytes). Must match bobble_league/Scripts/SharedMemory.cs.
     - 0-55    Observation (14 f32), learner's frame       Godot -> Python
     - 56-79   Learner action (6 f32) [a1,p1,...] angle+power, learner's frame  Python -> Godot
     - 80-83   Reward (f32), goal reward from learner POV  Godot -> Python
@@ -34,17 +34,25 @@ class Shared_memory_link:
     - 88      Scorer (u8, 0 none, 1 learner, 2 opponent)  Godot -> Python
     - 89      Play mode (u8, see PLAY_MODES)              Godot -> Python
     - 90      Opponent action valid (u8)                  Python -> Godot
+    - 91      Random start (u8, 1 = scatter the next reset) Python -> Godot (v5)
     - 92-115  Opponent action (6 f32), opponent's frame   Python -> Godot
     - 116     Protocol version (u8)                       Godot -> Python
+    - 117     OOB reset (u8, 1 = this turn hit an out-of-bounds kickoff) Godot -> Python (v5)
     - 120-123 Turn seconds (f32), game seconds the turn took to settle  Godot -> Python
 
     v4 only GREW the buffer with turn-length telemetry; the action/obs contract is
-    unchanged, so a Phase 2-4 checkpoint's action_format stays 3.
+    unchanged, so a Phase 2-4 checkpoint's action_format stays 3. v5 claims two
+    pad bytes (Phase 12, step 1): byte 91 is a random-start flag (Python sets it
+    before a reset request to scatter that reset to a random legal layout instead
+    of kickoff), and byte 117 is an out-of-bounds flag (Godot sets it when the
+    turn it just finished hit an OOB kickoff, so Python can skip the position
+    shaping over that jump). Both only steer bodies / telemetry; the action/obs
+    contract is still unchanged, so action_format stays 3.
 
     Start Godot FIRST: it zeroes the buffer and writes the version when it boots.
     """
 
-    PROTOCOL_VERSION = 4
+    PROTOCOL_VERSION = 5
 
     OBS_OFFSET = 0
     OBS_SIZE = 14 * 4
@@ -59,8 +67,10 @@ class Shared_memory_link:
     SCORER_OFFSET = 88
     PLAY_MODE_OFFSET = 89
     OPP_VALID_OFFSET = 90
+    RANDOM_START_OFFSET = 91
     OPP_ACT_OFFSET = 92
     VERSION_OFFSET = 116
+    OOB_RESET_OFFSET = 117
     TURN_SECONDS_OFFSET = 120
     TURN_SECONDS_SIZE = 4
     TOTAL_SIZE = 124
@@ -133,8 +143,15 @@ class Shared_memory_link:
         """Tell Godot to play a turn. Call after write_action / write_opponent_action."""
         self.buf[self.STEP_REQ_OFFSET] = 1
 
-    def request_reset(self):
-        """Signal Godot to reset the environment."""
+    def request_reset(self, random_start=False):
+        """Signal Godot to reset the environment.
+
+        random_start (Phase 12, step 1): when True, set the byte-91 flag so Godot
+        scatters this reset to a random legal non-overlapping layout instead of
+        kickoff. The flag is written BEFORE the reset request so Godot sees it when
+        it handles the reset, and cleared otherwise so a plain reset stays kickoff.
+        """
+        self.buf[self.RANDOM_START_OFFSET] = 1 if random_start else 0
         self.buf[self.RESET_REQ_OFFSET] = 1
 
     # ---- godot -> python ----
@@ -162,6 +179,12 @@ class Shared_memory_link:
         """Game seconds the last turn took to settle (0 right after a reset)."""
         raw = self.buf[self.TURN_SECONDS_OFFSET:self.TURN_SECONDS_OFFSET + self.TURN_SECONDS_SIZE]
         return struct.unpack('<f', raw)[0]
+
+    def read_oob_reset(self):
+        """True when the turn Godot just finished hit an out-of-bounds kickoff
+        (Phase 12, step 1). The positions jump back to kickoff mid-turn, so the
+        caller skips the position-difference shaping over that turn."""
+        return self.buf[self.OOB_RESET_OFFSET] == 1
 
     def read_play_mode(self):
         return self.PLAY_MODES.get(self.buf[self.PLAY_MODE_OFFSET], "UNKNOWN")

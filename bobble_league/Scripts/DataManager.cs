@@ -22,14 +22,16 @@ public partial class DataManager : Node {
     // layout: [ball_x, ball_z, f1_x, f1_z, f2_x, f2_z, f3_x, f3_z, e1_x, e1_z, e2_x, e2_z, e3_x, e3_z]
     // (friendly = learnerTeam, all in learnerTeam's frame)
     // turnSeconds is how long this turn took to settle in game seconds (0 on a reset).
-    public void Export(bool done, float reward, bool reset, int learnerTeam, int scorer, int playMode, float turnSeconds = 0f) {
+    // oobReset (v5) is true when this turn hit an out-of-bounds kickoff, so python
+    // skips the position shaping over the jump.
+    public void Export(bool done, float reward, bool reset, int learnerTeam, int scorer, int playMode, float turnSeconds = 0f, bool oobReset = false) {
         if (memory == null || !memory.IsReady) return;
         float[] obs = BuildObservation(learnerTeam);
 
         if (reset) {
             memory.SendResetResults(obs, learnerTeam, playMode);
         } else {
-            memory.SendStepResults(obs, reward, done, learnerTeam, scorer, playMode, turnSeconds);
+            memory.SendStepResults(obs, reward, done, learnerTeam, scorer, playMode, turnSeconds, oobReset);
         }
     }
 
@@ -67,6 +69,11 @@ public partial class DataManager : Node {
 
     public bool IsResetRequested() {
         return memory != null && memory.IsResetRequested();
+    }
+
+    // v5: did python ask for this reset to be scattered to a random legal layout?
+    public bool IsRandomStartRequested() {
+        return memory != null && memory.IsRandomStartRequested();
     }
 
     public bool TryReadStep(out float[] action, out float[] opponentAction) {

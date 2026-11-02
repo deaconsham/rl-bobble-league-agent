@@ -154,11 +154,13 @@ def test_single_game_shaping_fade(tmp_path, monkeypatch):
     game = Mock_godot(path, goal_after=3, scorer=1)
     made = {}
 
-    def env_fn(opponent=None, reward_config=None, max_ep_len=1000, step_timeout=120.0):
+    def env_fn(opponent=None, reward_config=None, max_ep_len=1000, step_timeout=120.0,
+               random_start_prob=0.0, gamma=0.99, **kwargs):
         bridge = Shared_memory_link(path=path, create=False)
         env = Bobble_league_env(opponent=opponent, reward_config=reward_config,
                                 max_ep_len=max_ep_len, step_timeout=step_timeout,
-                                bridge=bridge)
+                                bridge=bridge, random_start_prob=random_start_prob,
+                                gamma=gamma, **kwargs)
         made["env"] = env
         return env
 
