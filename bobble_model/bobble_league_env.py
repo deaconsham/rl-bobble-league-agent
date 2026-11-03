@@ -21,12 +21,20 @@ OBS_SCALE = np.array([FIELD_HALF_X, FIELD_HALF_Z] * 7, dtype=np.float32)
 
 
 def normalize_obs(raw_obs):
-    """World units -> roughly [-1, 1]."""
+    """
+    Docstring for normalize_obs:
+
+    World units -> roughly [-1, 1].
+    """
     return np.clip(np.asarray(raw_obs, dtype=np.float32) / OBS_SCALE, -1.0, 1.0)
 
 
 def split_obs(raw_obs):
-    """Returns (ball[2], friendly[3,2], enemy[3,2])."""
+    """
+    Docstring for split_obs:
+
+    Returns (ball[2], friendly[3,2], enemy[3,2]).
+    """
     o = np.asarray(raw_obs, dtype=np.float32).reshape(7, 2)
     return o[0], o[1:4], o[4:7]
 
@@ -45,7 +53,10 @@ ACTION_PAIRS = 3  # angle + power per player, 3 players
 
 
 def wrap_angle(a):
-    """Wrap an angle number into [-1, 1) with a = (a + 1) % 2 - 1.
+    """
+    Docstring for wrap_angle:
+
+    Wrap an angle number into [-1, 1) with a = (a + 1) % 2 - 1.
 
     The angle axis is circular: a and a+2 both mean the same aim (theta differs
     by 2*pi). Clipping a sample past the edge to +-1 instead pins it at the seam,
@@ -56,19 +67,24 @@ def wrap_angle(a):
     the ANGLE slots wrap; power still clips (it is a magnitude, not circular).
 
     Note a == +1 maps to -1, but both ends of the seam are the same direction
-    (own goal), so that is the same aim, not a jump."""
+    (own goal), so that is the same aim, not a jump.
+    """
     a = np.asarray(a, dtype=np.float32)
     return ((a + 1.0) % 2.0 - 1.0).astype(np.float32)
 
 
 def wrap_action(action):
-    """Wrap the angle slots (0, 2, 4) of a 6-number action and clip the power
+    """
+    Docstring for wrap_action:
+
+    Wrap the angle slots (0, 2, 4) of a 6-number action and clip the power
     slots (1, 3, 5) to [-1, 1]. Returns a new array; the input is not changed.
 
     This is the single clip/wrap applied to a decoded action before it reaches
     Godot. PPO stores the PRE-wrap sampled action (its log-probs are under the
     unwrapped Gaussian), so wrapping here only changes what is played, never what
-    is learned from."""
+    is learned from.
+    """
     action = np.asarray(action, dtype=np.float32).reshape(-1).copy()
     action[0::2] = wrap_angle(action[0::2])              # angle slots wrap
     action[1::2] = np.clip(action[1::2], -1.0, 1.0)      # power slots clip
@@ -76,18 +92,26 @@ def wrap_action(action):
 
 
 def decode_power(p):
-    """Power number p in [-1, 1] -> scale in [0.2, 1.0]."""
+    """
+    Docstring for decode_power:
+
+    Power number p in [-1, 1] -> scale in [0.2, 1.0].
+    """
     p = np.clip(np.asarray(p, dtype=np.float32), -1.0, 1.0)
     return MIN_POWER + (1.0 - MIN_POWER) * (p + 1.0) / 2.0
 
 
 def decode_angle(a):
-    """Angle number a -> (x, z) unit direction in the mirrored frame.
+    """
+    Docstring for decode_angle:
+
+    Angle number a -> (x, z) unit direction in the mirrored frame.
 
     a is WRAPPED into [-1, 1) (the angle axis is circular), then theta = a * pi
     from -z, so a=0 aims at the enemy goal (-z) and the seam (a=+-1) aims straight
     back at own goal (+z). Matches Godot's Atan2(x, z). Wrapping (not clipping)
     keeps an out-of-range sample's real aim instead of pinning it at own goal.
+
     """
     a = wrap_angle(a)
     theta = a * np.pi
@@ -97,10 +121,14 @@ def decode_angle(a):
 
 
 def decode_action(action):
-    """6-number action [a1, p1, a2, p2, a3, p3] -> (3, 2) launch vectors.
+    """
+    Docstring for decode_action:
+
+    6-number action [a1, p1, a2, p2, a3, p3] -> (3, 2) launch vectors.
 
     Each player's vector is its unit aim direction scaled by its power, in the
     team's mirrored frame. Length is the power, so Player.Launch can scale by it.
+
     """
     action = np.asarray(action, dtype=np.float32).reshape(ACTION_PAIRS, 2)
     angles = action[:, 0]
@@ -111,8 +139,12 @@ def decode_action(action):
 
 
 def encode_action(angles, powers):
-    """Inverse helper for scripted opponents: pack angle/power numbers into the
-    6-number wire action [a1, p1, a2, p2, a3, p3]."""
+    """
+    Docstring for encode_action:
+
+    Inverse helper for scripted opponents: pack angle/power numbers into the
+    6-number wire action [a1, p1, a2, p2, a3, p3].
+    """
     angles = np.asarray(angles, dtype=np.float32).reshape(ACTION_PAIRS)
     powers = np.asarray(powers, dtype=np.float32).reshape(ACTION_PAIRS)
     out = np.empty(6, dtype=np.float32)
@@ -122,11 +154,15 @@ def encode_action(angles, powers):
 
 
 def vector_to_action(vectors):
-    """(3, 2) mirrored-frame launch vectors -> 6-number wire action.
+    """
+    Docstring for vector_to_action:
+
+    (3, 2) mirrored-frame launch vectors -> 6-number wire action.
 
     Used by the chaser and human input, which think in (x, z): the direction
     sets the angle (a = atan2(x, -z) / pi, seam at own goal) and the vector
-    length sets the power (clamped into [0.2, 1], then back to [-1, 1])."""
+    length sets the power (clamped into [0.2, 1], then back to [-1, 1]).
+    """
     vectors = np.asarray(vectors, dtype=np.float32).reshape(ACTION_PAIRS, 2)
     x = vectors[:, 0]
     z = vectors[:, 1]
@@ -140,8 +176,11 @@ def vector_to_action(vectors):
 
 def opponent_view(raw_obs):
     """
+    Docstring for opponent_view:
+
     Learner-frame obs -> the same moment seen from the opponent's frame.
     The two frames differ by a z flip, and friendly/enemy swap.
+
     """
     ball, friendly, enemy = split_obs(raw_obs)
     flip = np.array([1.0, -1.0], dtype=np.float32)
@@ -151,6 +190,8 @@ def opponent_view(raw_obs):
 @dataclass
 class RewardConfig:
     """
+    Docstring for RewardConfig:
+
     Per-turn shaping added on top of Godot's goal reward (+1 / -1).
 
     Phase 12, step 3: the position terms are now EXACT potential-based shaping.
@@ -171,6 +212,7 @@ class RewardConfig:
 
     Distances are divided by FIELD_HALF_Z. Set a weight to 0 to switch that term
     off.
+
     """
     goal: float = 1.0               # scales Godot's +-1
     ball_to_goal: float = 0.5       # potential: ball nearer the opponent goal
@@ -200,6 +242,8 @@ class RewardConfig:
 
 def potential(raw_obs, cfg):
     """
+    Docstring for potential:
+
     State potential phi(s) for the potential-based shaping (Phase 12, step 3).
 
     phi is built from the learner-frame raw obs and the RewardConfig weights, so
@@ -215,6 +259,7 @@ def potential(raw_obs, cfg):
 
     time_penalty is NOT in phi (it is a real per-turn cost, added outside the
     telescoping shaping). Takes a raw (un-normalized) obs, same frame as _shaping.
+
     """
     ball, friendly, _ = split_obs(raw_obs)
     phi = 0.0
@@ -230,6 +275,8 @@ def potential(raw_obs, cfg):
 
 def legacy_shaping(prev_raw, raw, cfg):
     """
+    Docstring for legacy_shaping:
+
     The Phase 11 (pre-Phase-12) shaping, kept as the DEFAULT when
     `--potential-shaping` is off (Phase 12 evaluated the exact potential form and
     it did not beat Phase 11 in T5, so it is no longer the default).
@@ -237,6 +284,7 @@ def legacy_shaping(prev_raw, raw, cfg):
     This is NOT exact potential-based shaping: it is the un-discounted distance
     deltas `phi(s') - phi(s)` (no gamma), a flat per-state defence penalty, and
     the flat time_penalty. It takes raw (un-normalized) obs, the learner's frame.
+
     """
     p_ball, p_friendly, _ = split_obs(prev_raw)
     n_ball, n_friendly, _ = split_obs(raw)
@@ -279,6 +327,8 @@ def shaping_fade_fraction(epoch, total_epochs, fade_fraction=0.5):
 
 class Bobble_league_env(gym.Env):
     """
+    Docstring for Bobble_league_env:
+
     Gymnasium environment for Bobble League reinforcement learning.
     Communicates with Godot via the shared memory bridge.
 
@@ -297,6 +347,7 @@ class Bobble_league_env(gym.Env):
         reward_config: RewardConfig for shaping.
         max_ep_len: turns before the episode is truncated.
         step_timeout: seconds to wait for Godot per turn; None = forever (human play).
+
     """
 
     metadata = {"render_modes": ["human"]}
@@ -402,7 +453,10 @@ class Bobble_league_env(gym.Env):
     # ---- reward shaping ----
 
     def _shaping(self, prev_raw, raw, terminated=False, skip=False):
-        """Per-turn shaping. Two forms, chosen by `self.potential_shaping`.
+        """
+        Docstring for _shaping:
+
+        Per-turn shaping. Two forms, chosen by `self.potential_shaping`.
 
         OFF (default, the Phase 11 form): the un-discounted distance deltas
         `phi(s') - phi(s)` with a flat defence penalty, minus the flat
@@ -415,6 +469,7 @@ class Bobble_league_env(gym.Env):
         (`terminated`), plus the flat time_penalty (a real cost, outside the
         telescoping sum). `skip` is True on the turn right after an out-of-bounds
         kickoff, where the positions jump, so no shaping is applied there.
+
         """
         cfg = self.reward_config
         if not getattr(self, 'potential_shaping', False):
@@ -437,7 +492,11 @@ class Bobble_league_env(gym.Env):
 
 # Helper function to create environment (used by training loop)
 def bobble_league_env_helper(**kwargs):
-    """Spinning Up style env_fn."""
+    """
+    Docstring for bobble_league_env_helper:
+
+    Spinning Up style env_fn.
+    """
     return Bobble_league_env(**kwargs)
 
 
@@ -692,16 +751,23 @@ class Vector_env:
         opp.record_result(idx, learner_won)
 
     def _is_live_opponent(self, i):
-        """True when game i's opponent is currently the live learner (SelfPlayPool live slot)."""
+        """
+        Docstring for _is_live_opponent:
+
+        True when game i's opponent is currently the live learner (SelfPlayPool live slot).
+        """
         opp = self.opponents[i]
         return opp is not None and getattr(opp, "is_live_current", None) is not None and opp.is_live_current()
 
     def _maybe_add_opponent_turn(self, i, info, prev_raw, raw_obs, goal_reward, terminated, oob_reset=False):
         """
+        Docstring for _maybe_add_opponent_turn:
+
         Fill info['opponent'] with Team B's transition for a live-vs-live game, so
         the training loop can push it into the opponent-side buffer. The acting
         obs/action/value/logp come from the LiveOpponent (recorded at act time,
         already in the opponent frame); here we add the reward Team B earned.
+
         """
         if not self._is_live_opponent(i):
             return
