@@ -72,8 +72,12 @@ def live_elo_rating(records, k=32.0, anchor_ratings=None, label="live"):
 
 
 def _reset_quietly(env):
-    """Reset the spare game, swallowing a reset timeout so a wedged game can never
-    propagate out of the eval. Returns True on a clean reset, False on a timeout."""
+    """
+    Docstring for _reset_quietly:
+
+    Reset the spare game, swallowing a reset timeout so a wedged game can never
+    propagate out of the eval. Returns True on a clean reset, False on a timeout.
+    """
     try:
         env.reset()
         return True
@@ -82,7 +86,10 @@ def _reset_quietly(env):
 
 
 def _play_match(env, agent, n_games, relaunch=None, deadline=None, max_hangs=2):
-    """Play n_games with `agent` on the learner side against env's current
+    """
+    Docstring for _play_match:
+
+    Play n_games with `agent` on the learner side against env's current
     opponent. Returns (env, wins, losses, draws) from the learner's point of view.
 
     Resilient to a wedged spare game (Phase 12 review fix). A turn that never
@@ -102,7 +109,8 @@ def _play_match(env, agent, n_games, relaunch=None, deadline=None, max_hangs=2):
 
     A turn or reset timeout always counts the game a draw, mirroring
     league_eval.play_match. The returned env may be a FRESH one after a relaunch,
-    so the caller must use the returned env from here on."""
+    so the caller must use the returned env from here on.
+    """
     wins = losses = draws = 0
     hangs = 0
     _reset_quietly(env)
@@ -184,12 +192,16 @@ def score_vs_anchors(env, state_dict, anchors, n_games=20, abs_std=None,
 
 def head_to_head(env, state_dict_a, state_dict_b, n_games=20, relaunch=None,
                  deadline=None):
-    """Play net A (learner, mean move) vs net B (opponent, mean move) on the spare
+    """
+    Docstring for head_to_head:
+
+    Play net A (learner, mean move) vs net B (opponent, mean move) on the spare
     game, n_games. Returns (env, A's (wins, losses, draws)). Used for the best.pt
     gate: a challenger must beat the current best here, not just post a higher Elo.
 
     `relaunch` / `deadline` are passed through to `_play_match` (Phase 12 review
-    fix). env may be a fresh one after a relaunch, so the caller keeps it."""
+    fix). env may be a fresh one after a relaunch, so the caller keeps it.
+    """
     agent = PolicyOpponent(state_dict_a, deterministic=True, name="challenger")
     opp = PolicyOpponent(state_dict_b, deterministic=True, name="best")
     env.opponent = opp
@@ -199,8 +211,12 @@ def head_to_head(env, state_dict_a, state_dict_b, n_games=20, relaunch=None,
 
 
 def beats_best(wins, losses, draws, threshold=BEST_GATE_WIN_RATE):
-    """True when the challenger's score rate (a draw is half a win) over the
-    head-to-head games is strictly above `threshold`. No games -> False."""
+    """
+    Docstring for beats_best:
+
+    True when the challenger's score rate (a draw is half a win) over the
+    head-to-head games is strictly above `threshold`. No games -> False.
+    """
     total = int(wins) + int(losses) + int(draws)
     if total <= 0:
         return False
@@ -209,7 +225,10 @@ def beats_best(wins, losses, draws, threshold=BEST_GATE_WIN_RATE):
 
 
 def loses_head_to_head(wins, losses, draws, threshold=BEST_GATE_WIN_RATE):
-    """True when the challenger CLEARLY lost the head-to-head: its score rate (a
+    """
+    Docstring for loses_head_to_head:
+
+    True when the challenger CLEARLY lost the head-to-head: its score rate (a
     draw is half a win) is strictly below 1 - threshold. No games -> False (an
     empty / wedged h2h is not a clear loss, it is no evidence).
 
@@ -220,7 +239,8 @@ def loses_head_to_head(wins, losses, draws, threshold=BEST_GATE_WIN_RATE):
     Elo). The 25-Elo margin is already the noise guard, so the h2h's only remaining
     job is to catch a save that is ahead on the anchor scale yet CLEARLY behind the
     current best one-on-one (score < 0.45): that, and only that, blocks promotion.
-    A level or wedged h2h no longer vetoes a clear margin winner."""
+    A level or wedged h2h no longer vetoes a clear margin winner.
+    """
     total = int(wins) + int(losses) + int(draws)
     if total <= 0:
         return False
@@ -269,6 +289,8 @@ class Best_tracker:
 
     def consider(self, epoch, elo, head_to_head_record=None):
         """
+        Docstring for consider:
+
         Fold one live check in. `elo` is this save's live Elo; when there is
         already a best, `head_to_head_record` is this save's (w, l, d) vs the best
         (play it before calling, or pass None to decline promotion this check).
@@ -277,6 +299,7 @@ class Best_tracker:
           became_best: True if this save is the new best (loop should save best.pt),
           rollback:    True if the loop should load best.pt back,
           reason:      short text for the log.
+
         """
         # first ever check: this save is best outright.
         if self.best_elo is None:

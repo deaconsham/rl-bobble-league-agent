@@ -42,7 +42,11 @@ def pfsp_weights(win_rates, power=2.0, eps=1e-6):
 
 
 class StillOpponent:
-    """Never moves."""
+    """
+    Docstring for StillOpponent:
+
+    Never moves.
+    """
     name = "still"
 
     def act(self, raw_obs):
@@ -50,7 +54,11 @@ class StillOpponent:
 
 
 class RandomOpponent:
-    """Random launch directions."""
+    """
+    Docstring for RandomOpponent:
+
+    Random launch directions.
+    """
     name = "random"
 
     def __init__(self, seed=None):
@@ -62,6 +70,8 @@ class RandomOpponent:
 
 class ChaserOpponent:
     """
+    Docstring for ChaserOpponent:
+
     Simple scripted baseline: each player launches at the ball, aiming a bit
     behind it (seen from the goal it attacks) so contact pushes the ball goal-ward.
 
@@ -69,6 +79,7 @@ class ChaserOpponent:
     three straight-line chasers scored from kickoff in one turn almost every time:
     only the `kickoff_movers` players nearest the ball move, with wider aim noise,
     and the rest stay home.
+
     """
     name = "chaser"
 
@@ -166,7 +177,10 @@ class ReplayOpponent:
 
 
 class PolicyOpponent:
-    """A frozen actor-critic network (CPU).
+    """
+    Docstring for PolicyOpponent:
+
+    A frozen actor-critic network (CPU).
 
     `std_scale` shrinks the sampling spread at play time: with deterministic off,
     actions are sampled from the policy mean with its std multiplied by
@@ -178,7 +192,8 @@ class PolicyOpponent:
     slot) instead of scaling the net's own std. Scoring runs use abs_std=0.1 (the
     small-sigma scoring in Phase 10, step 7) so the Elo number does not move with
     whatever spread the net currently carries. abs_std takes precedence over
-    std_scale and is likewise ignored when deterministic is True."""
+    std_scale and is likewise ignored when deterministic is True.
+    """
 
     def __init__(self, state_dict=None, deterministic=False, hidden=(256, 256),
                  name="policy", std_scale=1.0, abs_std=None, use_layernorm=False):
@@ -228,6 +243,8 @@ class PolicyOpponent:
 
 class LiveOpponent:
     """
+    Docstring for LiveOpponent:
+
     The CURRENT learner playing the opponent side (live vs live).
 
     Unlike PolicyOpponent it holds a REFERENCE to the live actor-critic, not a
@@ -238,6 +255,7 @@ class LiveOpponent:
 
     'obs' here is the normalized opponent-frame observation the net acted on, so
     it matches exactly what the loop stores for Team B.
+
     """
     name = "live"
 
@@ -260,6 +278,8 @@ class LiveOpponent:
 
 class SelfPlayPool:
     """
+    Docstring for SelfPlayPool:
+
     Self-play opponent. Keeps the last `max_size` snapshots of the learner.
     Each episode (reset) it picks one of three kinds of opponent so the learner
     does not overfit to one:
@@ -272,6 +292,7 @@ class SelfPlayPool:
     Each snapshot carries a win rate (the learner's win rate against it, as the
     training loop records results). It is kept so a resumed run restores the pool
     exactly and so later phases can pick harder copies more often.
+
     """
 
     def __init__(self, max_size=10, scripted_prob=0.15, live_prob=0.30,
@@ -297,7 +318,11 @@ class SelfPlayPool:
         return self.current.name
 
     def attach_live(self, ac):
-        """Give the pool the live actor-critic so it can play the learner side."""
+        """
+        Docstring for attach_live:
+
+        Give the pool the live actor-critic so it can play the learner side.
+        """
         self.live = LiveOpponent(ac)
         for sib in self._siblings:
             if sib is not self:
@@ -305,11 +330,14 @@ class SelfPlayPool:
 
     def make_siblings(self, n):
         """
+        Docstring for make_siblings:
+
         Build `n` pools that SHARE this pool's snapshot list, win rates and RNG-free
         settings, but each keep their OWN `current` opponent and policy buffer. With
         N parallel games this lets every game pick (and remember) its own opponent
         for the episode, while a snapshot added once is seen by all (shared list).
         Returns the list of n pools; element 0 is this pool.
+
         """
         siblings = [self]
         for i in range(1, n):
@@ -327,7 +355,11 @@ class SelfPlayPool:
         return siblings
 
     def is_live_current(self):
-        """True when this game's current opponent is the live learner (store its data)."""
+        """
+        Docstring for is_live_current:
+
+        True when this game's current opponent is the live learner (store its data).
+        """
         return self.current is self.live and self.live is not None
 
     def pick_snapshot_index(self):
@@ -434,11 +466,15 @@ class SelfPlayPool:
 
 
 def load_state_dict(path, map_location="cpu"):
-    """Loads a checkpoint saved by training_loop and refuses a pre-Phase-2 one.
+    """
+    Docstring for load_state_dict:
+
+    Loads a checkpoint saved by training_loop and refuses a pre-Phase-2 one.
 
     The action shape changed to angle+power (protocol v3) without changing any
     tensor shapes, so an old checkpoint would load silently and play garbage.
-    Only a full dict carrying 'action_format' == PROTOCOL_VERSION is accepted."""
+    Only a full dict carrying 'action_format' == PROTOCOL_VERSION is accepted.
+    """
     # weights_only=False matches training_loop.load_checkpoint: a full save
     # carries numpy RNG/pool objects, and it is the user's own training output.
     ckpt = torch.load(path, map_location=map_location, weights_only=False)
@@ -465,8 +501,11 @@ def load_state_dict(path, map_location="cpu"):
 
 def make_opponent(spec, deterministic=False):
     """
+    Docstring for make_opponent:
+
     'none' | 'still' | 'random' | 'chaser' | 'self' | path/to/checkpoint.pt
     ('self' returns a SelfPlayPool; the training loop feeds it snapshots.)
+
     """
     if spec in (None, "", "none"):
         return None

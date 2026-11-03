@@ -16,15 +16,23 @@ from bobble_league_env import Bobble_league_env, encode_action, split_obs
 
 
 def player0_pos(raw_obs):
-    """player 0's (x, z) in the learner frame, from the raw obs."""
+    """
+    Docstring for player0_pos:
+
+    player 0's (x, z) in the learner frame, from the raw obs.
+    """
     _, friendly, _ = split_obs(raw_obs)
     return friendly[0].copy()
 
 
 def shoot_at_power(env, power_number, settle_turns=1):
-    """one turn: player 0 aims at the enemy goal (angle 0) at the given power,
+    """
+    Docstring for shoot_at_power:
+
+    one turn: player 0 aims at the enemy goal (angle 0) at the given power,
     the other two aim back at their own goal (min power, harmless). returns how
-    far player 0 moved."""
+    far player 0 moved.
+    """
     # angle 0 = enemy goal (-z); other players angle +-1 = own goal
     angles = [0.0, 1.0, 1.0]
     powers = [power_number, -1.0, -1.0]

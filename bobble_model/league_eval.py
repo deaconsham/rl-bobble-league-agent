@@ -165,7 +165,11 @@ class _Match_slot:
         return self.games_left <= 0
 
     def drive_one_turn(self):
-        """Play one turn of the current game; roll the tally over when it ends."""
+        """
+        Docstring for drive_one_turn:
+
+        Play one turn of the current game; roll the tally over when it ends.
+        """
         if self.finished:
             return
         action = self.agent.act(self.env._raw_obs)

@@ -29,12 +29,16 @@ def latest_checkpoint(folder='checkpoints'):
 
 
 def default_model(folder='checkpoints'):
-    """The model used when --checkpoint is not given.
+    """
+    Docstring for default_model:
+
+    The model used when --checkpoint is not given.
 
     The shipped champion is checkpoints/best_final.pt (the Phase 14 best), so AI
     play and --human default to it. If it is missing (a fresh clone with no final
     model yet), fall back to the newest ppo_epoch_*.pt so a just-trained run still
-    just works."""
+    just works.
+    """
     final = os.path.join(folder, 'best_final.pt')
     if os.path.exists(final):
         return final
