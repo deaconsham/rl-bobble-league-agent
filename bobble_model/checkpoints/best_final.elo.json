@@ -1,6 +1,0 @@
-{
-  "elo": 1104,
-  "source": "Phase 16 T5 (40-game-per-pairing league)",
-  "source_csv": "bobble_model/p16_t5/logs/elo.csv",
-  "checkpoint": "best_final.pt"
-}

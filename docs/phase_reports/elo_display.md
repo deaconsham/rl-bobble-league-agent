@@ -1,3 +1,5 @@
+> **Removed.** This feature was taken out again; see `elo_display_removed.md`. Kept here as history.
+
 # Elo display during human vs AI play
 
 Branch `ai-vs-ai-optimization`. A small post-plan feature: show the AI model's
