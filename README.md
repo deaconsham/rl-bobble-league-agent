@@ -128,6 +128,20 @@ back to the newest `ppo_epoch_*.pt` if there is no final model yet.
    Human turns settle at the slower `HumanStopSpeed` (0.3), and a turn that never
    settles ends after `MaxTurnSeconds` (10 s).
 
+#### The AI's Elo
+
+Both sides show the model's measured Elo so you know how strong the opponent is.
+`evaluate.py` prints it at start (`Elo: 1104`), and in `HUMAN_VS_AI` the Godot
+window shows **AI Elo 1104** in the top-right corner.
+
+The number comes from a small sidecar next to the checkpoint,
+`checkpoints/best_final.elo.json` (`{"elo": 1104, ...}`), so re-scoring a model
+only rewrites that one-line file, not the 7 MB save, and Godot reads the same
+file without touching the shared-memory protocol. `best_final.pt`'s 1104 is its
+Phase 16 T5 score (40 games a pairing, `bobble_model/p16_t5/logs/elo.csv`). If
+the sidecar is missing an `elo` entry can instead live inside the checkpoint
+dict; with neither, both sides show **unrated**.
+
 ## Testing
 
 | Level | Command | Godot? |

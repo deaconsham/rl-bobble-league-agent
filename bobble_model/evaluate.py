@@ -12,6 +12,7 @@ shipped Phase 14 champion), falling back to the newest ppo_epoch_*.pt.
 """
 import argparse
 import glob
+import json
 import os
 import re
 
@@ -39,6 +40,35 @@ def default_model(folder='checkpoints'):
     if os.path.exists(final):
         return final
     return latest_checkpoint(folder)
+
+
+def checkpoint_elo(ckpt_path):
+    """The model's measured Elo, for display during play.
+
+    Looks for a sidecar '<checkpoint>.elo.json' next to the checkpoint (e.g.
+    checkpoints/best_final.elo.json), which holds an 'elo' number from the newest
+    scoring run. If there is no sidecar, it falls back to an 'elo' entry in the
+    checkpoint dict itself. Either way the number is returned as an int; when
+    neither is present, or the file is unreadable or has a bad 'elo', it returns
+    None so callers can show "unrated". A sidecar is used instead of baking the
+    number into the checkpoint so re-scoring never has to rewrite a 7 MB save, and
+    so Godot can read the same tiny file without the shared-memory protocol."""
+    sidecar = os.path.splitext(ckpt_path)[0] + '.elo.json'
+    if os.path.exists(sidecar):
+        try:
+            with open(sidecar, encoding='utf-8') as f:
+                return int(round(float(json.load(f)['elo'])))
+        except (ValueError, TypeError, KeyError, OSError):
+            return None
+    # no sidecar: an 'elo' tag saved inside the checkpoint is the fallback
+    try:
+        import torch
+        ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+        if isinstance(ckpt, dict) and 'elo' in ckpt:
+            return int(round(float(ckpt['elo'])))
+    except (ValueError, TypeError, OSError):
+        pass
+    return None
 
 
 def main():
@@ -72,6 +102,8 @@ def main():
     try:
         obs, info = env.reset()
         print(f"Model: {ckpt}")
+        elo = checkpoint_elo(ckpt)
+        print(f"Elo: {elo if elo is not None else 'unrated'}")
         print(f"Godot mode: {info['play_mode']}, AI is team {info['learner_team']}, "
               f"opponent: {'you' if args.human else getattr(opponent, 'name', 'none')}")
         if args.human and info['play_mode'] != 'HUMAN_VS_AI':

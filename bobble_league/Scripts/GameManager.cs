@@ -1,6 +1,8 @@
 using Godot;
 using System.Collections.Generic;
 using System;
+using System.IO;
+using System.Text.Json;
 
 public partial class GameManager : Node
 {
@@ -51,6 +53,14 @@ public partial class GameManager : Node
     [Export] DataManager dataManager;
     [Export] TextureRect jumps_care;
 
+    // the champion's Elo is shown here during HUMAN_VS_AI (hidden in ai_vs_ai).
+    [Export] Label aiEloLabel;
+    // the sidecar json holding the shown model's Elo, relative to res:// (the
+    // bobble_league project folder). evaluate.py --human defaults to
+    // best_final.pt, so the human HUD shows that model's score. read on _Ready
+    // with GlobalizePath, so it works running the scene from the editor.
+    [Export] public string AiEloSidecar = "../bobble_model/checkpoints/best_final.elo.json";
+
     int turn = 1;
     int currentTeam = 1;
 
@@ -81,9 +91,41 @@ public partial class GameManager : Node
         rng.Randomize();
         ReadCommandLine();
         ApplyStopSpeed();
+        ShowAiElo();
         if (CurrentPlayMode == PlayMode.AI_VS_AI && AIvsAITimeScale > 1f) {
             SetTimeScale(AIvsAITimeScale);
         }
+    }
+
+    // show the AI's Elo in HUMAN_VS_AI, read from the sidecar json evaluate.py
+    // writes next to the checkpoint. hidden in the other modes. a missing or bad
+    // file shows "AI Elo unrated" rather than failing, matching evaluate.py.
+    void ShowAiElo() {
+        if (aiEloLabel == null) return;
+        if (CurrentPlayMode != PlayMode.HUMAN_VS_AI) {
+            aiEloLabel.Visible = false;
+            return;
+        }
+        aiEloLabel.Text = "AI Elo " + ReadEloSidecar();
+        aiEloLabel.Visible = true;
+    }
+
+    // "1104" from the sidecar's 'elo', or "unrated" when it is missing, unreadable
+    // or has no usable number. the path is relative to res:// (the project folder).
+    string ReadEloSidecar() {
+        try {
+            string path = ProjectSettings.GlobalizePath("res://").PathJoin(AiEloSidecar);
+            if (!File.Exists(path)) return "unrated";
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (doc.RootElement.TryGetProperty("elo", out JsonElement elo)
+                && elo.TryGetDouble(out double value)) {
+                return Mathf.RoundToInt(value).ToString();
+            }
+        }
+        catch (Exception e) {
+            GD.PrintErr($"Could not read AI Elo sidecar: {e.Message}");
+        }
+        return "unrated";
     }
 
     // push the mode's stop speed onto the ball and every current player. the ball
