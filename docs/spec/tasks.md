@@ -103,3 +103,59 @@ library API names unchanged.
 - [ ] 8.2 Left-right mirror loss: penalize `pi(mirror(s)) != mirror(pi(s))` rather than adding raw mirrored samples. (R45)
 - [ ] 8.3 Teammate-shared network: one small net per player, shared weights, seeing itself, ball, teammates and enemies; new save format. (R46)
 - [ ] 8.4 **Test (T1, T5):** T1 per piece (mirror of a mirror is the same board; swapping teammates swaps their actions); T5 vs the Phase 7 model. (R47, R48, R49, R53)
+
+
+---
+
+## Phases 9-16: final state (addendum)
+
+Tasks 0.x-8.x above follow the original Phase 0-8 plan. The plan was renumbered
+and extended; `docs/optimization_plan.md` is the source of truth. The tasks below
+cover the later phases as shipped. (In the renumbered plan, the original "Phase 8:
+only if still easy to beat" became Phase 15 and was skipped; task 7.1/7.2 above is
+the overnight run, which ran.) Requirement IDs refer to the addendum in
+`requirements.md`.
+
+## Phase 9: train faster
+
+- [x] 9.1 Raise the AI_VS_AI time scale (48 standard) and lift the physics-steps cap so one Godot core is used fully; physics unchanged because ticks scale. (R54)
+
+## Phases 10-11: live Elo, best gate, LayerNorm, critic
+
+- [x] 10.1 Add `live_elo.py`: score the newest save every `--live-elo-freq` epochs on one spare Godot (`--live-elo-shm`) vs the chaser (1000) and defender (950) anchors; log to TensorBoard; off when the shm is unset. (R55)
+- [x] 10.2 Short `--live-elo-step-timeout` + overall `--live-elo-check-budget` so a wedged spare game ends the check instead of idling the run (Phase 12 review deadlock fix). (R55)
+- [x] 10.3 `Best_tracker`: a save becomes best when its live Elo clears the current best by > 25 Elo (authoritative margin); the h2h vetoes only a clear one-on-one loss (< 0.45), not as a second gate; rollback after 2 checks > 100 Elo below best. (R56)
+- [x] 10.4 `--best-path` / `--checkpoint-dir`: write best.pt and the `ppo_epoch_*.pt` saves under the run's own dir so runs do not overwrite each other. (R57)
+- [x] 11.1 `--value-norm` (running value-target norm, saved), `--n-passes-v`, `--clip-ratio`, `--n-minibatches`, `--kl-warm-start`/`--kl-coef`/`--kl-fade-fraction`. (R58)
+- [x] 11.2 `--use-layernorm` (+ `--weight-decay`): LayerNorm hidden layers; save format carries it; `PolicyOpponent.load` / `SelfPlayPool.load_state` auto-detect and rebuild. (R58)
+- [x] 11.3 **Test (T1, T5):** checkpoint round-trips value-norm/LayerNorm; T5 picks the run's real best from the epoch saves (live gate is noisy). (R48, R58, R53)
+
+## Phase 12: better data and rewards (kept, default off)
+
+- [x] 12.1 `--input-norm`: running obs mean/std inside the net, frozen at eval, saved. Default off. (R59)
+- [x] 12.2 `--random-start-prob`: random legal start layouts (Godot places, Python picks via byte 91; never ball-in-goal or player-in-wall). Default 0.0. (R59)
+- [x] 12.3 `--reward-scale` and `--potential-shaping`. Default off. (R59)
+- [x] 12.4 **Test (T1, T5):** Phase 12 unit tests pass; T5 shows the Phase 11 recipe still wins, so all four flags ship off. (R48, R59, R53)
+
+## Phase 13: bins — SKIPPED
+
+- [x] 13.1 Skipped on purpose: aim already fine (action sigma ~0.19), no discretized head needed. (R60)
+
+## Phase 14: long run 2
+
+- [x] 14.1 200 epochs / ~1.2M turns from `best_p11_ln.pt` with the Phase 11 recipe; full saves per run dir; live Elo + best gate on. (R61)
+- [x] 14.2 Best-gate promotion fix (margin authoritative, h2h veto-only) + epoch saves to the run dir; regression tests. (R56, R57)
+- [x] 14.3 **Test (T5):** 40-game T5 of selected epochs vs `best_p11_ln.pt`; epoch 100 wins (~1156 vs ~1104, 27-13 h2h) and ships as `checkpoints/best_final.pt`. (R61, R53)
+
+## Phase 15: exploiter / mirror loss / shared net — SKIPPED
+
+- [x] 15.1 Skipped on purpose: after long run 2 the AI is no longer easy to beat. (R60)
+
+## Phase 16: final clean-up and test
+
+- [x] 16.1 Codebase clean-up: CLI consistent across `training_loop.py`/`evaluate.py`/`league_eval.py`/`launch_games.py`; no dead flags; Phase 12 flags kept default off; superseded one-off scripts archived under `scripts/archive/` with a README (provenance). (R62)
+- [x] 16.2 Copy the champion to `checkpoints/best_final.pt` and make it `evaluate.py`'s default (`default_model`). (R61)
+- [x] 16.3 Update `README.md` and `docs/spec/` to the final code. (R62)
+- [ ] 16.4 **Test:** full `pytest`; `dotnet build` 0 errors; Godot `--import` (revert any SDK bump); T4 6-game smoke; T5 on `best_final.pt` vs the 4 anchors + `best_p11_ln.pt` + the repeated-move exploit rate. (R62)
+- [ ] 16.5 Human-vs-AI feel check by hand (`python evaluate.py --human` vs `best_final.pt`): stop speed, 10 s turn limit, kick power. Waiting on the user. (R62)
+- [ ] 16.6 Write `docs/phase_reports/phase16.md` (what was removed, CLI changes, test results, T5 table, the human-play command) and commit. (R62)
