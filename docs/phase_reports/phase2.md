@@ -116,7 +116,7 @@ covered live.
   `AnimatedTexture` deprecation warning in `GameManager.cs`, not from this phase).
 - Godot `--import`: succeeded; the csproj SDK bump the import makes is reverted by
   the smoke script (verified: `BobbleLeague.csproj` unchanged in git).
-- **T4 live smoke** (`scripts/smoke_test_phase2.ps1 -Games 6`, 2 epochs x 2400
+- **T4 live smoke** (`scripts/archive/smoke_test_phase2.ps1 -Games 6`, 2 epochs x 2400
   total turns, timescale 32, 10-game eval of the fresh checkpoint):
 
   | metric | value |

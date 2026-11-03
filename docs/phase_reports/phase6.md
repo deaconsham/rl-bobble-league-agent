@@ -21,7 +21,7 @@ Staged by explicit path only — these files:
 `bobble_model/training_loop.py`, `bobble_model/evaluate.py`,
 `tests/unit/test_elo.py` (new), `tests/unit/test_opponents.py`,
 `tests/unit/test_rewards.py`, `tests/mock/test_live_vs_live.py`,
-`scripts/smoke_test_phase6.ps1` (new), `docs/spec/tasks.md` (Phase 6 boxes
+`scripts/archive/smoke_test_phase6.ps1` (new), `docs/spec/tasks.md` (Phase 6 boxes
 ticked only), and this report.
 
 **Left out on purpose** (same policy as Phases 0-5): the prior-session
@@ -142,7 +142,7 @@ mock Godot).
   `AnimatedTexture` deprecation warning in `GameManager.cs`, not from this phase).
   No C# changed this phase; the build gate is run because the plan requires it.
 
-### T4 live smoke (`scripts/smoke_test_phase6.ps1 -Games 4`)
+### T4 live smoke (`scripts/archive/smoke_test_phase6.ps1 -Games 4`)
 
 Train 4 epochs x 1200 total turns, self-play, **`--pfsp --shaping-fade`**,
 timescale 32 (4 games because free RAM was ~4.9 GB, the plan's tight fallback),

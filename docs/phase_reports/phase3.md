@@ -99,7 +99,7 @@ pass 1, resume mid-decay) are covered.
   this phase).
 - **Orthogonal init verified**: policy-head weight std ~6e-4 (gain 0.01, near-zero
   start), value-head std ~0.063 (gain 1.0).
-- **T4 live smoke** (`scripts/smoke_test_phase2.ps1 -Games 4`, 2 epochs x 1600 total
+- **T4 live smoke** (`scripts/archive/smoke_test_phase2.ps1 -Games 4`, 2 epochs x 1600 total
   turns, timescale 32; 4 games because free RAM was ~4.8 GB, the plan's tight
   fallback):
 

@@ -170,7 +170,7 @@ flags). Findings:
   cases in `test_phase10.py`, 1 corrected assertion in `test_checkpoint.py`.
 - **`dotnet build`: 0 errors**, 1 pre-existing `AnimatedTexture` obsolete warning
   (not ours; present since before this review). No C# changed in this item.
-- **T4 live smoke, 6 games @ timescale 48** (`scripts/smoke_test_phase9.ps1`):
+- **T4 live smoke, 6 games @ timescale 48** (`scripts/archive/smoke_test_phase9.ps1`):
   2373 turns/min, **0 stuck**, **0 out-of-bounds**, 0 tracebacks, 10 eval goals
   (W3/L7). Real `--launch` path, exercising the new `Game_launcher` change.
 

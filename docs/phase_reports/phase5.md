@@ -21,7 +21,7 @@ Staged by explicit path only — these files:
 `bobble_model/training_loop.py`, `tests/mock_godot.py`,
 `tests/unit/test_protocol.py`, `tests/unit/test_opponents.py`,
 `tests/unit/test_both_teams.py`, `tests/mock/test_live_vs_live.py`,
-`scripts/smoke_test_phase5.ps1`, `docs/spec/tasks.md` (Phase 5 boxes ticked only),
+`scripts/archive/smoke_test_phase5.ps1`, `docs/spec/tasks.md` (Phase 5 boxes ticked only),
 and this report.
 
 **Left out on purpose** (same policy as Phases 0-4): the prior-session working-tree
@@ -145,7 +145,7 @@ turn length each step.
 - **`dotnet build`: Build succeeded, 0 Error(s)** (one pre-existing
   `AnimatedTexture` deprecation warning in `GameManager.cs`, not from this phase).
 
-- **T4 live smoke** (`scripts/smoke_test_phase5.ps1 -Games 4`, 2 epochs × 1200
+- **T4 live smoke** (`scripts/archive/smoke_test_phase5.ps1 -Games 4`, 2 epochs × 1200
   total turns, self-play, timescale 32; 4 games because free RAM was ~4.8 GB, the
   plan's tight fallback):
 

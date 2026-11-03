@@ -58,7 +58,7 @@ player (in `Spawn`, since players are re-instantiated each turn) via a new
 
 ## Time scale: measured turns/min on 6 games
 
-Measured with `scripts/smoke_test_phase9.ps1` (6 games, `--launch`, 2 epochs x
+Measured with `scripts/archive/smoke_test_phase9.ps1` (6 games, `--launch`, 2 epochs x
 1200 steps = 2400 turns, eval 10 games vs chaser). Turns/min is total game-turns
 over the training wall clock (one training step plays one turn on every game).
 
@@ -141,7 +141,7 @@ Free RAM 6.2 GB of 16 GB, ~1 GB used with 6 games running. Comfortable, so
 - `bobble_model/training_loop.py`, `launch_games.py` — default time scale 48.
 - `tests/mock_godot.py` — per-game `step_delay`.
 - `tests/mock/test_async_step.py`, `tests/mock/test_league_parallel.py` — new T2 tests.
-- `scripts/smoke_test_phase9.ps1` — the 6-game T4 at one time scale (launches its
+- `scripts/archive/smoke_test_phase9.ps1` — the 6-game T4 at one time scale (launches its
   own detached games via `training_loop --launch`, stops only what it started).
 
 ## Recommended training invocation

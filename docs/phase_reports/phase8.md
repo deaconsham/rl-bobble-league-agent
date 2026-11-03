@@ -25,12 +25,12 @@ pushed.
 | `dotnet build` | 0 errors (1 pre-existing unrelated `AnimatedTexture` warning) |
 | Godot `--import` | scene parses; csproj SDK bump 4.6.1 -> 4.6.0 reverted |
 | T4 live smoke (`scripts/smoke_test.ps1`) | PASS: goals 9, stuck 0, out of bounds 0 |
-| 200 live games (`scripts/verify_no_oob.ps1`) | 0 balls out of the pitch, 0 stuck |
+| 200 live games (`scripts/archive/verify_no_oob.ps1`) | 0 balls out of the pitch, 0 stuck |
 
 ## Epoch-60 bar
 
 Re-tested `p7_run/checkpoints/ppo_epoch_60.pt` over 40 games each
-(`scripts/eval_epoch60.ps1`, output `p7_run/elo_epoch60.csv`), anchored to
+(`scripts/archive/eval_epoch60.ps1`, output `p7_run/elo_epoch60.csv`), anchored to
 chaser 1000 / defender 950 / replay 850 / random 800:
 
 **Epoch-60 Elo = 825.9.** This is the bar later phases must beat.
@@ -139,8 +139,8 @@ single-game path, now passes.
 
 ## New reusable scripts
 
-- `scripts/verify_no_oob.ps1` - play N games, count balls out of the pitch.
-- `scripts/eval_epoch60.ps1` - the epoch-60 40-game Elo re-test.
+- `scripts/archive/verify_no_oob.ps1` - play N games, count balls out of the pitch.
+- `scripts/archive/eval_epoch60.ps1` - the epoch-60 40-game Elo re-test.
 
 Both launch their own detached Godot on a private shm and stop only that Godot.
 

@@ -18,7 +18,7 @@ is recorded in the work report at `done`.
 
 Staged by explicit path only — four files:
 `bobble_model/warm_start.py`, `tests/unit/test_warm_start.py`,
-`scripts/t5_warm_start.ps1`, `docs/spec/tasks.md` (Phase 4 boxes ticked only).
+`scripts/archive/t5_warm_start.ps1`, `docs/spec/tasks.md` (Phase 4 boxes ticked only).
 
 **Left out on purpose** (same policy as Phases 0-3): the prior-session
 working-tree edits that are **not mine** — `bobble_league/Scripts/TeamGoal.cs`,
@@ -71,7 +71,7 @@ other phases (`docs/spec/design.md`, `requirements.md`,
 | warm checkpoint loads through the `--init` loader (`opponents.load_state_dict`) | `test_warm_checkpoint_loads_through_init_path` |
 | full `warm_start()` over mock games, result loads via `--init` | `test_warm_start_end_to_end_over_mock_games` |
 
-**`scripts/t5_warm_start.ps1` (new) — T5 (R53).** Records chaser demos over N real
+**`scripts/archive/t5_warm_start.ps1` (new) — T5 (R53).** Records chaser demos over N real
 games and clones -> `warm_start.pt`; saves a random-init net -> `random_init.pt`;
 evaluates each vs the chaser over `-Episodes` games (>= 20) on one dedicated
 headless Godot each; reports win rate and goal diff (mean return) for both and
@@ -84,7 +84,7 @@ Each Godot is launched detached via WMI and only the pids it started are stopped
   `test_warm_start.py`).
 - **`dotnet build`: Build succeeded, 0 Error(s)** (C# untouched; one pre-existing
   `AnimatedTexture` deprecation warning, not from this phase).
-- **T4 live smoke** (`scripts/smoke_test_phase2.ps1 -Games 4`, 2 epochs x 1200
+- **T4 live smoke** (`scripts/archive/smoke_test_phase2.ps1 -Games 4`, 2 epochs x 1200
   total turns, timescale 32; 4 games because free RAM was ~4.5-5 GB, the plan's
   tight fallback):
 
@@ -102,7 +102,7 @@ Each Godot is launched detached via WMI and only the pids it started are stopped
 
   **SMOKE PASS.**
 
-- **T5 strength** (`scripts/t5_warm_start.ps1 -Games 4 -RecordTurns 6000
+- **T5 strength** (`scripts/archive/t5_warm_start.ps1 -Games 4 -RecordTurns 6000
   -CloneEpochs 30 -Episodes 20`), warm-started net and random-init net each vs the
   chaser, BEFORE any PPO, 20 games each:
 

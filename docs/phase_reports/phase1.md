@@ -81,7 +81,7 @@ leaving the pitch (out-of-bounds), and real turn settling / stuck detection.
   `AnimatedTexture` deprecation warning in `GameManager.cs`, not from this phase).
 - Godot `--import`: succeeded; the csproj SDK bump the import makes is reverted by
   the smoke script each run (verified: `BobbleLeague.csproj` unchanged in git).
-- **T4 live smoke** (`scripts/smoke_test_phase1.ps1 -Games 6`, 2 epochs x 1200 total
+- **T4 live smoke** (`scripts/archive/smoke_test_phase1.ps1 -Games 6`, 2 epochs x 1200 total
   steps, timescale 32, 10-game eval):
 
   | metric | value |
