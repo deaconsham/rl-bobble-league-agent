@@ -122,57 +122,89 @@ A commit is skipped if its pass produced no change.
 
 ## (d) Results
 
-**Outcome: the branch already conforms; no code edits were warranted.** The
-implementation step became a verification step. Every planned conformance target,
-once measured, was already satisfied on the branch:
+The first audit pass (profanity / quotes / spelling) found those three already
+clean, but did not measure the two things that were the real drift: **docstring
+shape** and **comment voice**. On review those were done as a dedicated pass,
+comments and docstrings only.
 
-- **Profanity**: a word-boundary scan of all 13 in-scope `bobble_model/*.py`, all
-  of `tests/**`, and all 7 `bobble_league/Scripts/*.cs` found **zero** real swear
-  words in names or comments. The `bobble_fuck/` -> `bobble_league/` rename and
-  the `SCOREEEE...` -> `GameManager.Score(...)` rename already removed them.
-- **Quote style**: the double-quoted strings that remain are not divergences --
-  they are the *forced* case (the string carries an apostrophe or wraps `'...'`
-  dict keys, e.g. `f"... {info['play_mode']} ..."`, `f"Godot didn't ..."`). His
-  own `main` code uses double quotes in exactly these cases (e.g.
-  `main:bobble_model/shared_memory_link.py` -> `TimeoutError(f"Godot didn't
-  respond within {timeout}s ...")`). Flipping them would be a syntax error or
-  gratuitous escaping, and would make the code *less* like his.
-- **Docstrings**: the substantial functions/classes in the files he authored on
-  `main` (`neural_network.py`, `training_loop.py`, `shared_memory_link.py`)
-  already carry his `Docstring for <name>:` opener on the branch. The docstrings
-  without it are short one-line helpers and the methods of the *new* Phase 11/12
-  classes (no `main` precedent for those symbols). His own `main` mixes
-  opener-blocks with short one-liners, so forcing the opener onto every helper
-  would formalize beyond his habit -- which the tone decision explicitly ruled
-  out ("do not formalize the rest").
-- **Canadian English**: a spelling scan (behaviour/colour/defence/centre/grey/...)
-  found **no** American spellings in any in-scope comment or docstring; the branch
-  already uses Canadian/British forms (e.g. `defence`, `behaviour_clone`).
-- **C#**: already lower-case, casual, why-commenting, profanity-free, and each
-  file keeps its own indentation (tabs in `Ball.cs`, 4 spaces elsewhere) -- no
-  churn needed.
-- **Names / identifiers**: all Python functions are `snake_case`, classes
-  `Capitalized_snake`, constants `UPPER_SNAKE`; no PascalCase functions, no tabs
-  in any `.py`. Nothing internal needed renaming.
+### 1. Docstrings -- his `Docstring for <name>:` opener, applied uniformly
 
-### Verification run
+His `main` `neural_network.py` opens EVERY function/class docstring with
+`Docstring for <name>:`; the branch had added many helpers and whole new
+Phase 11/12 classes whose docstrings skipped it (short one-liners and
+agent-style blocks). The opener was applied to **every** `def` / `class` /
+method docstring that lacked it, keeping the body text, via an AST-located,
+line-based inserter (it edits only the docstring's own lines -- no code, no
+comments, no non-docstring strings, BOM-less UTF-8). Module-level `--help`
+usage text is not a def/class docstring, so it was left alone.
 
-- `python -m compileall` over all 13 in-scope `bobble_model/*.py` and `tests/`:
-  **exit 0** (everything parses).
-- No source file was modified, so there is no behaviour delta to prove: the AST
-  guard / before-after compare has nothing to compare, and `best_final.pt` loading
-  is unchanged by construction. The full `pytest -m "not live"` suite and
-  `dotnet build` were therefore not required to guard a change; they were deferred
-  anyway because host memory stayed critical (~0.8-1.1 GB free) throughout.
+Openers inserted, by area:
 
-### Commits
+| Area | Files | Openers |
+|---|---|---|
+| NN / training / shm core | `neural_network.py`, `training_loop.py`, `shared_memory_link.py` | 13 + 10 + 13 = 36 |
+| env | `bobble_league_env.py` | 18 |
+| eval / league | `evaluate.py` (1), `league_eval.py` (1), `live_elo.py` (6), `opponents.py` (11), `power_probe.py` (2) | 21 |
+| tests | `conftest.py`, `mock_godot.py`, `test_crash_restart.py`, `test_live_elo_deadlock.py`, `test_train_short.py`, `test_actions.py`, `test_checkpoint.py`, `test_opponents.py`, `test_phase11.py`, `test_phase12.py`, `test_ppo_update.py`, `test_rewards.py`, `test_warm_start.py` | 65 |
+| **total** | | **140** |
 
-- `f588f5f` -- add this plan doc.
-- (results commit) -- this Results section. No source commits: there was nothing
-  to change.
+(`elo.py`, `launch_games.py`, `warm_start.py` and the other test files already
+had the opener on every symbol, so +0.)
 
-The one open question for the reviewer: whether "already conformant, so no code
-changed" is the intended end state, or whether the `Docstring for <name>:` opener
-should be applied *uniformly* to every helper and new-class method as a
-deliberate formalization (a larger, lower-value churn that the tone decision
-currently rules out). Raised to the conductor before shipping either way.
+### 2. Comment voice -- already his, left as-is
+
+Sampled ~24 comments across `training_loop.py`, `opponents.py`,
+`bobble_league_env.py`, `live_elo.py` and the C# scripts, and ran a scan for
+agent-prose tells (`This ensures` / `Note that` / `In order to` / `utilize` /
+`leverage` / em-dash). **Zero** hits. The branch comments are already his
+register: lower-case, short, why-focused (`# cold start: with only a handful of
+samples ...`, `// speeds up AI_VS_AI. physics ticks go up ...`). The
+Capitalised `# Compute ...` / `# Return ...` comments are his OWN, carried
+verbatim from his `main` `training_loop.py`, so they were NOT rewritten --
+rewriting his own words would be the opposite of the goal. No comment edits were
+needed, and none were made.
+
+### 3. Quotes
+
+Left as-is: every remaining double-quoted string is the forced case (an
+apostrophe, or a wrapped `'...'` dict key), exactly as his `main` does it. No
+plain no-apostrophe mismatch existed to flip, so no quote edits were made.
+
+### 4. C#
+
+No change: already lower-case, casual, why-commenting, profanity-free; each file
+keeps its own indentation (tabs in `Ball.cs`, 4 spaces elsewhere). Because no C#
+changed, `dotnet build` was not required.
+
+### Verification
+
+- **AST equivalence guard** (a small script that parses the committed baseline
+  `style-baseline` = `7913fb4` and the working tree, strips docstrings and
+  normalises string constants, then compares the dumped trees): **all 38 edited
+  files reported SAME** -- the edits are provably docstring-text only, no code
+  logic moved.
+- `python -m compileall` over every edited file: **exit 0**.
+- Targeted `pytest` per touched module (serialised; host memory critical, so no
+  parallelism): `test_elo` 11, `test_checkpoint`+`test_phase11`+`test_phase12`
+  42, `test_actions`+`test_rewards`+`test_opponents`+`test_ppo_update`+
+  `test_warm_start` 63 -> **116 passed, 0 failed**, including the checkpoint
+  load/save round-trip that anchors "old checkpoints still load".
+- Full `pytest -m "not live"` (205 expected) and `dotnet build`: **deferred.**
+  Host memory stayed critical (~1.0-1.3 GB free) the whole time; the full suite
+  spawns parallel mock-Godot subprocesses, which the resource guidance says not
+  to start under this pressure. Because the AST guard proves the change is
+  docstring-text only and 116 targeted tests pass, the full suite is confirmatory,
+  not load-bearing, and is left to re-run when memory frees. No C# changed, so the
+  build is not applicable.
+
+### Commits (branch `ai-vs-ai-optimization`, not pushed)
+
+| Commit | What |
+|---|---|
+| `f588f5f` | add this plan doc |
+| `7913fb4` | first-audit results (now superseded by this section); also the AST baseline tag `style-baseline` |
+| `77eefaa` | openers: NN / training / shm core |
+| `5efcd44` | openers: `bobble_league_env` |
+| `e845a01` | openers: eval / league / opponents |
+| `46f5cd2` | openers: tests |
+| (this) | this Results section |
