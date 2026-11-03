@@ -41,9 +41,13 @@ def _env_on(path, step_timeout):
 
 
 def test_wedged_spare_game_bails_out_fast_without_relaunch(tmp_path):
-    """A spare game that wedges mid-check, with NO relaunch available, must return
+    """
+    Docstring for test_wedged_spare_game_bails_out_fast_without_relaunch:
+
+    A spare game that wedges mid-check, with NO relaunch available, must return
     in BOUNDED time (max_hangs), not wait a full timeout on every one of n_games.
-    Before the fix this ground through n_games * step_timeout."""
+    Before the fix this ground through n_games * step_timeout.
+    """
     shm = str(tmp_path / "live_elo.dat")
     mock = Mock_godot(shm, goal_after=3, step_delay=0.02)
     env = _env_on(shm, step_timeout=0.3)
@@ -72,9 +76,13 @@ def test_wedged_spare_game_bails_out_fast_without_relaunch(tmp_path):
 
 
 def test_check_budget_caps_the_whole_check(tmp_path):
-    """An already-spent deadline makes the check return at once, scoring the games
+    """
+    Docstring for test_check_budget_caps_the_whole_check:
+
+    An already-spent deadline makes the check return at once, scoring the games
     draws, instead of playing any turn. This is the backstop that bounds one
-    live-Elo check even with no launcher to relaunch a wedged game."""
+    live-Elo check even with no launcher to relaunch a wedged game.
+    """
     shm = str(tmp_path / "live_elo.dat")
     mock = Mock_godot(shm, goal_after=3, step_delay=0.02)
     env = _env_on(shm, step_timeout=0.3)
@@ -100,12 +108,16 @@ def test_check_budget_caps_the_whole_check(tmp_path):
 
 
 def test_relaunch_recovers_and_keeps_scoring(tmp_path):
-    """The real-run path: the spare game wedges, the relaunch callback brings up a
+    """
+    Docstring for test_relaunch_recovers_and_keeps_scoring:
+
+    The real-run path: the spare game wedges, the relaunch callback brings up a
     FRESH healthy game (as Vector_env relaunches a training game), and the eval
     recovers and scores real games afterward rather than all draws.
 
     Uses Mock_launcher so the relaunch follows the same stop_one/launch_one/
-    wait_for_handshake path the training loop uses for the real spare game."""
+    wait_for_handshake path the training loop uses for the real spare game.
+    """
     launcher = Mock_launcher(1, tmp_path, goal_after=3)
     launcher.launch_all()
     shm = launcher.shm_paths[0]

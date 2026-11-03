@@ -30,12 +30,16 @@ def make_ac_and_opts(pi_lr=3e-4, vf_lr=1e-3):
 
 
 def fake_data(n, ac=None, obs_dim=14, act_dim=6):
-    """a batch like join_and_normalize returns: obs, act, ret, adv, logp.
+    """
+    Docstring for fake_data:
+
+    a batch like join_and_normalize returns: obs, act, ret, adv, logp.
 
     logp is recorded UNDER the policy that collected the data (here `ac`), the
     way a real rollout stores it, so the pre-update approx_kl starts near 0. With
     a random logp instead, KL would look huge on pass 0 and the early stop would
     fire before any learning, which is not how the live loop behaves.
+
     """
     obs = torch.randn(n, obs_dim)
     ret = torch.randn(n)
@@ -51,8 +55,12 @@ def fake_data(n, ac=None, obs_dim=14, act_dim=6):
 
 
 def test_one_update_logs_finite_and_in_range():
-    """finite losses, and approx_kl / clip fraction / explained variance / passes
-    all come back in the dict."""
+    """
+    Docstring for test_one_update_logs_finite_and_in_range:
+
+    finite losses, and approx_kl / clip fraction / explained variance / passes
+    all come back in the dict.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     data = fake_data(600, ac)   # not a multiple of 256: 256 + 256 + 88
 
@@ -71,11 +79,15 @@ def test_one_update_logs_finite_and_in_range():
 
 
 def test_gradients_are_clipped_to_half():
-    """after backward (before the step) the grad norm of each net is <= 0.5.
+    """
+    Docstring for test_gradients_are_clipped_to_half:
+
+    after backward (before the step) the grad norm of each net is <= 0.5.
 
     we replicate one minibatch's clip here so we can read the norm the clip
     returns: clip_grad_norm_ returns the norm BEFORE clipping, and caps it in
     place, so the post-clip norm must be <= max_grad_norm (+ a little float slack).
+
     """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     data = fake_data(300, ac)
@@ -99,8 +111,12 @@ def test_gradients_are_clipped_to_half():
 
 
 def test_lr_decays_linearly_then_holds_at_floor():
-    """the schedule ramps both LRs down from their base, but never below 30% of
-    the base (Phase 10 LR floor), holding there for the rest of the run."""
+    """
+    Docstring for test_lr_decays_linearly_then_holds_at_floor:
+
+    the schedule ramps both LRs down from their base, but never below 30% of
+    the base (Phase 10 LR floor), holding there for the rest of the run.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts(pi_lr=3e-4, vf_lr=1e-3)
     epochs = 10
     sched = Linear_lr_schedule([pi_opt, vf_opt], [3e-4, 1e-3], total=epochs)
@@ -129,8 +145,12 @@ def test_lr_decays_linearly_then_holds_at_floor():
 
 
 def test_lr_step_saves_and_resumes_mid_decay(tmp_path):
-    """resume restores the LR step so decay picks up where it left off, not at
-    the full LR."""
+    """
+    Docstring for test_lr_step_saves_and_resumes_mid_decay:
+
+    resume restores the LR step so decay picks up where it left off, not at
+    the full LR.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts(pi_lr=3e-4, vf_lr=1e-3)
     epochs = 10
     sched = Linear_lr_schedule([pi_opt, vf_opt], [3e-4, 1e-3], total=epochs)
@@ -153,7 +173,11 @@ def test_lr_step_saves_and_resumes_mid_decay(tmp_path):
 
 
 def test_batch_smaller_than_minibatch_runs():
-    """a batch smaller than the minibatch size still updates (one minibatch of n)."""
+    """
+    Docstring for test_batch_smaller_than_minibatch_runs:
+
+    a batch smaller than the minibatch size still updates (one minibatch of n).
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     data = fake_data(100, ac)   # < 256
     info = update_from_data(ac, data, pi_opt, vf_opt, minibatch_size=256, n_passes=3)
@@ -162,7 +186,11 @@ def test_batch_smaller_than_minibatch_runs():
 
 
 def test_batch_exactly_divisible_by_minibatch():
-    """a batch that is an exact multiple of 256 sweeps cleanly with no remainder."""
+    """
+    Docstring for test_batch_exactly_divisible_by_minibatch:
+
+    a batch that is an exact multiple of 256 sweeps cleanly with no remainder.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     data = fake_data(512, ac)   # 256 + 256, no remainder
     info = update_from_data(ac, data, pi_opt, vf_opt, minibatch_size=256, n_passes=2)
@@ -171,8 +199,12 @@ def test_batch_exactly_divisible_by_minibatch():
 
 
 def test_kl_early_stop_on_first_pass():
-    """a tiny target_kl forces the per-pass KL check to trip on pass 0, so no
-    pass runs (early stop is per pass and can fire immediately)."""
+    """
+    Docstring for test_kl_early_stop_on_first_pass:
+
+    a tiny target_kl forces the per-pass KL check to trip on pass 0, so no
+    pass runs (early stop is per pass and can fire immediately).
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     data = fake_data(300, ac)
     # nudge the policy so the batch's approx_kl is clearly > 0, then a tiny
@@ -185,7 +217,11 @@ def test_kl_early_stop_on_first_pass():
 
 
 def test_explained_variance_bounds():
-    """explained_variance is 1 for a perfect fit and 0 when returns are constant."""
+    """
+    Docstring for test_explained_variance_bounds:
+
+    explained_variance is 1 for a perfect fit and 0 when returns are constant.
+    """
     r = torch.randn(50)
     assert explained_variance(r.clone(), r.clone()) == pytest.approx(1.0, abs=1e-6)
     const = torch.ones(50) * 3.0
@@ -193,8 +229,12 @@ def test_explained_variance_bounds():
 
 
 def test_entropy_bonus_resists_std_collapse():
-    """with a positive ent_coef the net is pushed toward MORE entropy: log_std
-    should not collapse hard after a few updates on fixed fake data (sanity)."""
+    """
+    Docstring for test_entropy_bonus_resists_std_collapse:
+
+    with a positive ent_coef the net is pushed toward MORE entropy: log_std
+    should not collapse hard after a few updates on fixed fake data (sanity).
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts(pi_lr=1e-3)
     data = fake_data(512, ac)
     std_before = ac.log_std.detach().clone()

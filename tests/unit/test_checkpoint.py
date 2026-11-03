@@ -25,7 +25,11 @@ def make_ac_and_opts():
 
 
 def take_one_step(ac, pi_opt, vf_opt):
-    """put real state into the optimizers so the round trip has something to check."""
+    """
+    Docstring for take_one_step:
+
+    put real state into the optimizers so the round trip has something to check.
+    """
     obs = torch.randn(8, 14)
     dist, value = ac(obs)
     loss = -dist.log_prob(torch.zeros(8, 6)).mean() + value.mean()
@@ -83,8 +87,12 @@ def test_rng_state_round_trip():
 
 
 def test_old_checkpoint_is_refused_with_clear_message(tmp_path):
-    """Phase 2: the action meaning changed (angle+power) without changing tensor
-    shapes, so a pre-Phase-2 save must be refused, not loaded silently."""
+    """
+    Docstring for test_old_checkpoint_is_refused_with_clear_message:
+
+    Phase 2: the action meaning changed (angle+power) without changing tensor
+    shapes, so a pre-Phase-2 save must be refused, not loaded silently.
+    """
     ac, _, _ = make_ac_and_opts()
 
     # a phase-0 bare state_dict save
@@ -101,7 +109,11 @@ def test_old_checkpoint_is_refused_with_clear_message(tmp_path):
 
 
 def test_old_checkpoint_is_refused_by_eval_loader(tmp_path):
-    """opponents.load_state_dict (eval / frozen opponent path) refuses it too."""
+    """
+    Docstring for test_old_checkpoint_is_refused_by_eval_loader:
+
+    opponents.load_state_dict (eval / frozen opponent path) refuses it too.
+    """
     from opponents import load_state_dict as opp_load
 
     ac, _, _ = make_ac_and_opts()
@@ -112,10 +124,14 @@ def test_old_checkpoint_is_refused_by_eval_loader(tmp_path):
 
 
 def test_new_checkpoint_loads_through_both_paths(tmp_path):
-    """a Phase 2 save (carrying action_format) loads cleanly in both loaders, and
+    """
+    Docstring for test_new_checkpoint_loads_through_both_paths:
+
+    a Phase 2 save (carrying action_format) loads cleanly in both loaders, and
     is tagged with the PINNED angle+power era (ACTION_FORMAT_VERSION == 3), NOT the
     live protocol version: a side-channel-only protocol bump (v4/v5) must not change
-    the action-format tag, since the action/obs contract did not change."""
+    the action-format tag, since the action/obs contract did not change.
+    """
     from opponents import load_state_dict as opp_load
     from training_loop import ACTION_FORMAT_VERSION
 
@@ -130,10 +146,14 @@ def test_new_checkpoint_loads_through_both_paths(tmp_path):
 
 
 def test_prior_protocol_checkpoint_still_loads(tmp_path):
-    """Regression (Phase 12): bumping the protocol to v5 (random-start / OOB flags)
+    """
+    Docstring for test_prior_protocol_checkpoint_still_loads:
+
+    Regression (Phase 12): bumping the protocol to v5 (random-start / OOB flags)
     must NOT invalidate a checkpoint tagged with an earlier angle+power protocol
     (v3/v4). The action/obs contract is unchanged across those bumps, so a v4 save
-    like best_p11_ln.pt loads through both the resume and eval loaders."""
+    like best_p11_ln.pt loads through both the resume and eval loaders.
+    """
     from opponents import load_state_dict as opp_load
     from training_loop import MIN_ACTION_FORMAT
 
@@ -151,7 +171,11 @@ def test_prior_protocol_checkpoint_still_loads(tmp_path):
 
 
 def test_pool_round_trip_empty(tmp_path):
-    """resume with a pool of 0 copies: no snapshots saved, loads back empty."""
+    """
+    Docstring for test_pool_round_trip_empty:
+
+    resume with a pool of 0 copies: no snapshots saved, loads back empty.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     pool = SelfPlayPool(max_size=10)  # nothing added yet
     path = str(tmp_path / "ck0.pt")
@@ -164,7 +188,11 @@ def test_pool_round_trip_empty(tmp_path):
 
 
 def test_pool_round_trip_full(tmp_path):
-    """resume with a full pool of 10 copies: all 10 and their win rates round trip."""
+    """
+    Docstring for test_pool_round_trip_full:
+
+    resume with a full pool of 10 copies: all 10 and their win rates round trip.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     pool = SelfPlayPool(max_size=10)
     for _ in range(12):           # add more than max_size; oldest two drop

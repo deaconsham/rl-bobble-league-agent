@@ -20,7 +20,11 @@ from bobble_league_env import (
 
 
 class Dummy_bridge:
-    """stands in for the shm link so the env builds without Godot."""
+    """
+    Docstring for Dummy_bridge:
+
+    stands in for the shm link so the env builds without Godot.
+    """
     def close(self):
         pass
 
@@ -42,9 +46,13 @@ def make_obs(ball, friendly, enemy):
 
 
 def test_default_env_uses_legacy_shaping_not_pbrs():
-    """A plain env (potential_shaping defaults off) must reproduce the Phase 11
+    """
+    Docstring for test_default_env_uses_legacy_shaping_not_pbrs:
+
+    A plain env (potential_shaping defaults off) must reproduce the Phase 11
     shaping, not the Phase 12 potential form. This is the behaviour the Phase 12
-    'features default off' decision guarantees."""
+    'features default off' decision guarantees.
+    """
     cfg = RewardConfig(ball_to_goal=0.5, players_to_ball=0.05, defence=0.02, time_penalty=0.0)
     env = Bobble_league_env(reward_config=cfg, bridge=Dummy_bridge(), gamma=0.99)
     assert env.potential_shaping is False
@@ -94,8 +102,12 @@ def test_players_to_ball_rewards_closing_in():
 
 
 def test_defence_potential_improves_when_a_defender_drops_back():
-    """defence is now a potential: moving from nobody goal-side to someone
-    goal-side raises phi, so F = gamma*phi(next) - phi(prev) is positive."""
+    """
+    Docstring for test_defence_potential_improves_when_a_defender_drops_back:
+
+    defence is now a potential: moving from nobody goal-side to someone
+    goal-side raises phi, so F = gamma*phi(next) - phi(prev) is positive.
+    """
     cfg = RewardConfig(ball_to_goal=0, players_to_ball=0, defence=0.02, time_penalty=0)
     gamma = 0.99
     env = make_env(cfg, gamma=gamma)
@@ -115,7 +127,11 @@ def test_defence_potential_improves_when_a_defender_drops_back():
 
 
 def test_phi_is_zero_at_a_goal():
-    """on a terminal (goal) turn phi(s')=0, so F = -phi(prev)."""
+    """
+    Docstring for test_phi_is_zero_at_a_goal:
+
+    on a terminal (goal) turn phi(s')=0, so F = -phi(prev).
+    """
     cfg = RewardConfig(ball_to_goal=0.5, players_to_ball=0.05, defence=0.02, time_penalty=0)
     env = make_env(cfg)
     players = [[1, 1], [2, -1], [-1, 2]]
@@ -127,7 +143,11 @@ def test_phi_is_zero_at_a_goal():
 
 
 def test_shaping_skipped_after_out_of_bounds():
-    """the turn right after an OOB kickoff is skipped (positions jumped)."""
+    """
+    Docstring for test_shaping_skipped_after_out_of_bounds:
+
+    the turn right after an OOB kickoff is skipped (positions jumped).
+    """
     cfg = RewardConfig(ball_to_goal=0.5, players_to_ball=0.05, defence=0.02, time_penalty=0.01)
     env = make_env(cfg)
     prev = make_obs([0, 5], [[0, 0]] * 3, [[0, -1]] * 3)
@@ -136,8 +156,12 @@ def test_shaping_skipped_after_out_of_bounds():
 
 
 def test_shaping_telescopes_over_a_game():
-    """the discounted sum of F over a game telescopes to gamma^T*phi(end)-phi(start).
-    Phase 12, step 6 T1: this is the defining property of potential-based shaping."""
+    """
+    Docstring for test_shaping_telescopes_over_a_game:
+
+    the discounted sum of F over a game telescopes to gamma^T*phi(end)-phi(start).
+    Phase 12, step 6 T1: this is the defining property of potential-based shaping.
+    """
     cfg = RewardConfig(ball_to_goal=0.5, players_to_ball=0.05, defence=0.02, time_penalty=0)
     gamma = 0.97
     env = make_env(cfg, gamma=gamma)

@@ -28,11 +28,15 @@ def make_vec(tmp_path, n_games=6, goal_after=3, with_pool=False):
 
 
 def test_epoch_saves_land_in_run_dir_not_shared(tmp_path, monkeypatch):
-    """T2 (Phase 14 bug B): the periodic ppo_epoch_<N>.pt saves must follow the
+    """
+    Docstring for test_epoch_saves_land_in_run_dir_not_shared:
+
+    T2 (Phase 14 bug B): the periodic ppo_epoch_<N>.pt saves must follow the
     run's own folder (the directory of --best-path), NOT the shared
     bobble_model/checkpoints/. In long run 2 best_p14.pt went to
     p14_run/checkpoints/ while the epoch saves went to the shared dir, so two runs
-    could overwrite each other's saves."""
+    could overwrite each other's saves.
+    """
     monkeypatch.chdir(tmp_path)
     run_ckpt = tmp_path / "p14_run" / "checkpoints"
     best_path = str(run_ckpt / "best_p14.pt")
@@ -51,8 +55,12 @@ def test_epoch_saves_land_in_run_dir_not_shared(tmp_path, monkeypatch):
 
 
 def test_checkpoint_dir_overrides_best_path_dir(tmp_path, monkeypatch):
-    """T2: an explicit --checkpoint-dir sends epoch saves there even when
-    --best-path points elsewhere."""
+    """
+    Docstring for test_checkpoint_dir_overrides_best_path_dir:
+
+    T2: an explicit --checkpoint-dir sends epoch saves there even when
+    --best-path points elsewhere.
+    """
     monkeypatch.chdir(tmp_path)
     best_path = str(tmp_path / "bestonly" / "best.pt")
     ckpt_dir = tmp_path / "epochs_here"
@@ -68,9 +76,13 @@ def test_checkpoint_dir_overrides_best_path_dir(tmp_path, monkeypatch):
 
 
 def test_default_best_path_keeps_shared_checkpoints_dir(tmp_path, monkeypatch):
-    """T2: with the default best_path ('checkpoints/best.pt') epoch saves still
+    """
+    Docstring for test_default_best_path_keeps_shared_checkpoints_dir:
+
+    T2: with the default best_path ('checkpoints/best.pt') epoch saves still
     land in checkpoints/ - the fix must not change the default-path behaviour the
-    other mock tests rely on."""
+    other mock tests rely on.
+    """
     monkeypatch.chdir(tmp_path)
     vec = make_vec(tmp_path, n_games=6, goal_after=3)
     ppo_train(vec_env=vec, epochs=1, steps_per_epoch=60, save_freq=1,
@@ -120,10 +132,14 @@ def test_resume_restores_pool(tmp_path, monkeypatch):
 
 
 def test_phase11_full_config_runs_and_saves_value_norm(tmp_path, monkeypatch):
-    """T2: a short run with every Phase 11 knob on (value norm, separate critic
+    """
+    Docstring for test_phase11_full_config_runs_and_saves_value_norm:
+
+    T2: a short run with every Phase 11 knob on (value norm, separate critic
     passes, 4 large minibatches, a mean-only KL teacher) runs end to end on mock
     games and writes checkpoints whose value_norm stats are populated (count past
-    its epsilon start, so at least one batch was folded in)."""
+    its epsilon start, so at least one batch was folded in).
+    """
     from neural_network import Actor_critic_neural_network
     from training_loop import save_checkpoint
     from torch.optim import Adam
@@ -151,11 +167,15 @@ def test_phase11_full_config_runs_and_saves_value_norm(tmp_path, monkeypatch):
 
 
 def test_phase11_layernorm_full_config_runs_and_saves(tmp_path, monkeypatch):
-    """T2 (step 5): the same Phase 11 knobs but with LayerNorm on. The warm-start
+    """
+    Docstring for test_phase11_layernorm_full_config_runs_and_saves:
+
+    T2 (step 5): the same Phase 11 knobs but with LayerNorm on. The warm-start
     teacher must be built with LayerNorm too, because LayerNorm changes the saved
     weight shape and a plain teacher would not load into the LayerNorm learner.
     The run completes on mock games and still writes value_norm stats, so the
-    LayerNorm + weight-decay + value-norm + KL-teacher paths all wire together."""
+    LayerNorm + weight-decay + value-norm + KL-teacher paths all wire together.
+    """
     from neural_network import Actor_critic_neural_network
     from training_loop import save_checkpoint
     from torch.optim import Adam

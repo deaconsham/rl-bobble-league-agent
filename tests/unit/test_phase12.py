@@ -30,8 +30,12 @@ from mock_godot import Mock_godot
 # ---- input normalization (step 2) ----
 
 def test_input_norm_updates_and_normalizes():
-    """the running per-dim stats track a batch, and forward() brings a sample from
-    that distribution back to ~unit scale."""
+    """
+    Docstring for test_input_norm_updates_and_normalizes:
+
+    the running per-dim stats track a batch, and forward() brings a sample from
+    that distribution back to ~unit scale.
+    """
     rms = Input_norm(dim=14)
     rng = np.random.default_rng(0)
     data = rng.normal(5.0, 3.0, size=(4000, 14)).astype(np.float32)
@@ -60,8 +64,12 @@ def test_input_norm_clips_outliers():
 
 
 def test_input_norm_stats_travel_in_state_dict():
-    """the obs-norm buffers are part of the model state_dict, so a checkpoint
-    carries them and every consumer that loads the weights gets them."""
+    """
+    Docstring for test_input_norm_stats_travel_in_state_dict:
+
+    the obs-norm buffers are part of the model state_dict, so a checkpoint
+    carries them and every consumer that loads the weights gets them.
+    """
     ac = Actor_critic_neural_network(input_norm=True)
     keys = set(ac.state_dict().keys())
     assert {"obs_norm.mean", "obs_norm.var", "obs_norm.count"} <= keys
@@ -87,8 +95,12 @@ def test_input_norm_stats_survive_save_load(tmp_path):
 
 
 def test_old_save_without_input_norm_loads_with_fresh_stats(tmp_path):
-    """a pre-Phase-12 save has no obs_norm.* buffers; load_model_state keeps the
-    fresh identity stats instead of crashing (the plan's compatibility case)."""
+    """
+    Docstring for test_old_save_without_input_norm_loads_with_fresh_stats:
+
+    a pre-Phase-12 save has no obs_norm.* buffers; load_model_state keeps the
+    fresh identity stats instead of crashing (the plan's compatibility case).
+    """
     # build a state_dict with the obs_norm keys stripped, like an old save
     old = Actor_critic_neural_network(input_norm=True)
     sd = {k: v for k, v in old.state_dict().items() if not k.startswith("obs_norm.")}
@@ -100,8 +112,12 @@ def test_old_save_without_input_norm_loads_with_fresh_stats(tmp_path):
 
 
 def test_load_model_state_rejects_a_real_mismatch(tmp_path):
-    """a genuine shape mismatch (LayerNorm vs not) is still re-raised, not hidden
-    by the obs-norm tolerance."""
+    """
+    Docstring for test_load_model_state_rejects_a_real_mismatch:
+
+    a genuine shape mismatch (LayerNorm vs not) is still re-raised, not hidden
+    by the obs-norm tolerance.
+    """
     plain = Actor_critic_neural_network(use_layernorm=False, input_norm=True)
     ln = Actor_critic_neural_network(use_layernorm=True, input_norm=True)
     with pytest.raises(RuntimeError):
@@ -109,8 +125,12 @@ def test_load_model_state_rejects_a_real_mismatch(tmp_path):
 
 
 def test_input_norm_frozen_at_eval():
-    """eval never calls update(), so repeated forward passes do not move the
-    stats (the plan's 'frozen at eval time')."""
+    """
+    Docstring for test_input_norm_frozen_at_eval:
+
+    eval never calls update(), so repeated forward passes do not move the
+    stats (the plan's 'frozen at eval time').
+    """
     ac = Actor_critic_neural_network(input_norm=True)
     ac.eval()
     before = ac.obs_norm.mean.clone()
@@ -123,8 +143,12 @@ def test_input_norm_frozen_at_eval():
 # ---- random starts (step 1) ----
 
 def test_random_start_flag_reaches_godot(tmp_path):
-    """with random_start_prob=1.0 every reset asks the mock for a scattered
-    layout, so its random-start counter climbs once per reset."""
+    """
+    Docstring for test_random_start_flag_reaches_godot:
+
+    with random_start_prob=1.0 every reset asks the mock for a scattered
+    layout, so its random-start counter climbs once per reset.
+    """
     path = str(tmp_path / "shm.dat")
     game = Mock_godot(path, goal_after=99)
     bridge = Shared_memory_link(path=path, create=False)
@@ -153,8 +177,12 @@ def test_no_random_start_when_prob_zero(tmp_path):
 
 
 class _OobMock(Mock_godot):
-    """a mock that reports an out-of-bounds kickoff on its first step, to check the
-    env reads byte 117 and skips that turn's shaping."""
+    """
+    Docstring for _OobMock:
+
+    a mock that reports an out-of-bounds kickoff on its first step, to check the
+    env reads byte 117 and skips that turn's shaping.
+    """
     def __init__(self, *args, **kwargs):
         self._oob_done = False
         super().__init__(*args, **kwargs)
@@ -222,8 +250,12 @@ def test_env_skips_shaping_after_out_of_bounds(tmp_path):
 # ---- reward scaling (step 4) ----
 
 def test_reward_scaler_scales_toward_unit():
-    """after folding a stream in, the scaled rewards have ~unit-scale discounted
-    return, and a positive reward stays positive (no mean subtraction)."""
+    """
+    Docstring for test_reward_scaler_scales_toward_unit:
+
+    after folding a stream in, the scaled rewards have ~unit-scale discounted
+    return, and a positive reward stays positive (no mean subtraction).
+    """
     rs = RewardScaler(n_games=1, gamma=0.99)
     rng = np.random.default_rng(0)
     scaled_all = []
@@ -260,8 +292,12 @@ def test_reward_scaler_state_round_trip():
 
 
 def test_reward_scaler_fresh_is_near_identity():
-    """an empty/old save loads as std ~1 (var 1) BEFORE any scaling, so a resumed
-    run picks up the identity and re-learns the scale from there."""
+    """
+    Docstring for test_reward_scaler_fresh_is_near_identity:
+
+    an empty/old save loads as std ~1 (var 1) BEFORE any scaling, so a resumed
+    run picks up the identity and re-learns the scale from there.
+    """
     rs = RewardScaler(n_games=1, gamma=0.99)
     rs.load_state(None)   # no-op: leaves the fresh identity stats
     assert rs.ret_rms.var == pytest.approx(1.0)

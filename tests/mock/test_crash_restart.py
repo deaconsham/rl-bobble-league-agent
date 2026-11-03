@@ -48,7 +48,11 @@ def test_killing_one_restarts_only_that_game(tmp_path):
 
 
 def test_killing_two_restarts_both(tmp_path):
-    """two games crash in the same turn: both are cut + restarted, the other four keep going."""
+    """
+    Docstring for test_killing_two_restarts_both:
+
+    two games crash in the same turn: both are cut + restarted, the other four keep going.
+    """
     launcher, env = build(tmp_path, n_games=6)
     try:
         env.reset()

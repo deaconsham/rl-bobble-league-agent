@@ -284,11 +284,15 @@ def test_policy_std_scale_affects_sampling_spread():
 # ---- Phase 11 step 5: LayerNorm snapshots load into scoring/self-play opponents ----
 
 def test_policy_opponent_auto_detects_layernorm_snapshots():
-    """A PolicyOpponent must load a LayerNorm checkpoint even when it was built
+    """
+    Docstring for test_policy_opponent_auto_detects_layernorm_snapshots:
+
+    A PolicyOpponent must load a LayerNorm checkpoint even when it was built
     plain (and vice versa): the live-Elo and T5 scorers construct it without
     knowing the subject's architecture, so load() infers LayerNorm from the
     state_dict and rebuilds the net to match. Without this the step-5 run crashes
-    the moment the pool or the scorer meets a LayerNorm snapshot."""
+    the moment the pool or the scorer meets a LayerNorm snapshot.
+    """
     ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
     plain = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=False)
     raw = np.zeros(14, dtype=np.float32)
@@ -303,8 +307,12 @@ def test_policy_opponent_auto_detects_layernorm_snapshots():
 
 
 def test_self_play_pool_loads_a_layernorm_snapshot():
-    """A LayerNorm self-play pool seeded with a LayerNorm snapshot plays it on a
-    frozen-copy reset without a shape mismatch (Phase 11 step 5)."""
+    """
+    Docstring for test_self_play_pool_loads_a_layernorm_snapshot:
+
+    A LayerNorm self-play pool seeded with a LayerNorm snapshot plays it on a
+    frozen-copy reset without a shape mismatch (Phase 11 step 5).
+    """
     ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
     pool = SelfPlayPool(scripted_prob=0.0, live_prob=0.0, use_layernorm=True, seed=0)
     pool.add(ln.state_dict())
@@ -318,8 +326,12 @@ def test_self_play_pool_loads_a_layernorm_snapshot():
 
 
 def test_pool_state_round_trips_use_layernorm():
-    """A saved LayerNorm pool restores as LayerNorm, so a resumed step-5 run loads
-    its snapshots into the right architecture."""
+    """
+    Docstring for test_pool_state_round_trips_use_layernorm:
+
+    A saved LayerNorm pool restores as LayerNorm, so a resumed step-5 run loads
+    its snapshots into the right architecture.
+    """
     ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
     pool = SelfPlayPool(use_layernorm=True, seed=0)
     pool.add(ln.state_dict())

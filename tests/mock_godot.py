@@ -99,11 +99,19 @@ class Mock_godot:
     # ---- controls the test uses ----
 
     def set_hang(self, hang):
-        """when hung the loop stops clearing flags, so python times out."""
+        """
+        Docstring for set_hang:
+
+        when hung the loop stops clearing flags, so python times out.
+        """
         self._hang = hang
 
     def die(self):
-        """stop answering and release the file, like the process crashed."""
+        """
+        Docstring for die:
+
+        stop answering and release the file, like the process crashed.
+        """
         self._stop = True
         self._thread.join(timeout=2.0)
         self._close_file()
@@ -148,7 +156,11 @@ class Mock_godot:
         return (dirs * power[:, None]).astype(np.float32)
 
     def _advance(self, action):
-        """move friendly players a bit along their action, drift the ball."""
+        """
+        Docstring for _advance:
+
+        move friendly players a bit along their action, drift the ball.
+        """
         self._friendly = self._friendly + 0.5 * action
         self._ball = self._ball + 0.2 * action.mean(axis=0)
         self._ball = np.clip(self._ball, -18.0, 18.0).astype(np.float32)
@@ -257,7 +269,11 @@ class Mock_launcher:
         self.launch_counts = [0] * n_games
 
     def launch_one(self, index):
-        """start (or restart) the mock game at this index on its own shm file."""
+        """
+        Docstring for launch_one:
+
+        start (or restart) the mock game at this index on its own shm file.
+        """
         if self.games[index] is not None:
             self.games[index].stop()
         game = Mock_godot(self.shm_paths[index], goal_after=self.goal_after,
@@ -286,7 +302,11 @@ class Mock_launcher:
         raise TimeoutError(f"mock game {index} never handshook")
 
     def kill_game(self, index):
-        """simulate a crash: the mock stops answering and releases its file."""
+        """
+        Docstring for kill_game:
+
+        simulate a crash: the mock stops answering and releases its file.
+        """
         if self.games[index] is not None:
             self.games[index].die()
 

@@ -25,7 +25,11 @@ def frame_z(team):
 
 
 def godot_world_dir(a, team):
-    """mirror-frame angle a -> the (x, z) WORLD unit the player launches in."""
+    """
+    Docstring for godot_world_dir:
+
+    mirror-frame angle a -> the (x, z) WORLD unit the player launches in.
+    """
     theta = a * np.pi
     x = np.sin(theta)
     z = -np.cos(theta) * frame_z(team)

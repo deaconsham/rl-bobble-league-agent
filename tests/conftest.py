@@ -20,7 +20,11 @@ for p in (MODEL_DIR, TESTS_DIR):
 
 @pytest.fixture(autouse=True)
 def seed_everything():
-    """seed before each test. torch is optional for the pure-protocol tests."""
+    """
+    Docstring for seed_everything:
+
+    seed before each test. torch is optional for the pure-protocol tests.
+    """
     random.seed(0)
     np.random.seed(0)
     try:

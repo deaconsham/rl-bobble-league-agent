@@ -25,8 +25,12 @@ from warm_start import (
 
 
 def make_fixed_demos(n=512, seed=0):
-    """a fixed recorded set: random obs, a deterministic action that depends on
-    the obs (so a network CAN fit it), and returns that depend on the obs too."""
+    """
+    Docstring for make_fixed_demos:
+
+    a fixed recorded set: random obs, a deterministic action that depends on
+    the obs (so a network CAN fit it), and returns that depend on the obs too.
+    """
     rng = np.random.default_rng(seed)
     obs = rng.uniform(-1.0, 1.0, size=(n, 14)).astype(np.float32)
     # target action is a smooth function of a few obs components, in [-1, 1]
@@ -40,7 +44,11 @@ def make_fixed_demos(n=512, seed=0):
 
 
 def test_cloning_loss_drops_on_fixed_set():
-    """the central T1: behaviour-cloning pi and v losses fall over the epochs."""
+    """
+    Docstring for test_cloning_loss_drops_on_fixed_set:
+
+    the central T1: behaviour-cloning pi and v losses fall over the epochs.
+    """
     demos = make_fixed_demos()
     ac = Actor_critic_neural_network(obs_dim=14, act_dim=6)
     history = behaviour_clone(ac, demos, epochs=40, batch_size=128,
@@ -54,7 +62,11 @@ def test_cloning_loss_drops_on_fixed_set():
 
 
 def test_cloned_mean_is_near_the_recorded_action():
-    """after cloning, the policy MEAN sits close to the recorded actions."""
+    """
+    Docstring for test_cloned_mean_is_near_the_recorded_action:
+
+    after cloning, the policy MEAN sits close to the recorded actions.
+    """
     demos = make_fixed_demos()
     ac = Actor_critic_neural_network(obs_dim=14, act_dim=6)
     behaviour_clone(ac, demos, epochs=60, batch_size=128, device="cpu", verbose=False)
@@ -67,7 +79,11 @@ def test_cloned_mean_is_near_the_recorded_action():
 
 
 def test_log_std_is_reset_after_cloning():
-    """log_std ends at INIT_LOG_STD so PPO starts with real exploration noise."""
+    """
+    Docstring for test_log_std_is_reset_after_cloning:
+
+    log_std ends at INIT_LOG_STD so PPO starts with real exploration noise.
+    """
     demos = make_fixed_demos()
     ac = Actor_critic_neural_network(obs_dim=14, act_dim=6)
     # move log_std away first so the reset is visible
@@ -88,7 +104,11 @@ def test_log_std_left_alone_when_not_reset():
 
 
 def test_collect_demos_shapes_and_range(tmp_path):
-    """collect_demos over mock games gives (M,14)/(M,6)/(M,) with actions in [-1,1]."""
+    """
+    Docstring for test_collect_demos_shapes_and_range:
+
+    collect_demos over mock games gives (M,14)/(M,6)/(M,) with actions in [-1,1].
+    """
     n_games = 4
     launcher = Mock_launcher(n_games, tmp_path, goal_after=3)
     launcher.launch_all()
@@ -114,8 +134,12 @@ def test_collect_demos_shapes_and_range(tmp_path):
 
 
 def test_warm_checkpoint_loads_through_init_path(tmp_path):
-    """the saved warm checkpoint loads via opponents.load_state_dict, which is the
-    exact path training_loop.py --init uses, and the weights come back intact."""
+    """
+    Docstring for test_warm_checkpoint_loads_through_init_path:
+
+    the saved warm checkpoint loads via opponents.load_state_dict, which is the
+    exact path training_loop.py --init uses, and the weights come back intact.
+    """
     demos = make_fixed_demos()
     ac = Actor_critic_neural_network(obs_dim=14, act_dim=6)
     behaviour_clone(ac, demos, epochs=3, device="cpu", verbose=False)
@@ -131,8 +155,12 @@ def test_warm_checkpoint_loads_through_init_path(tmp_path):
 
 
 def test_warm_start_end_to_end_over_mock_games(tmp_path, monkeypatch):
-    """warm_start() records, clones and saves against mock games, and the result
-    loads through --init. ties the whole phase-4 path together Godot-free."""
+    """
+    Docstring for test_warm_start_end_to_end_over_mock_games:
+
+    warm_start() records, clones and saves against mock games, and the result
+    loads through --init. ties the whole phase-4 path together Godot-free.
+    """
     monkeypatch.chdir(tmp_path)
     n_games = 4
     launcher = Mock_launcher(n_games, tmp_path, goal_after=3)

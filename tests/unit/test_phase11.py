@@ -36,8 +36,12 @@ def make_ac_and_opts(use_layernorm=False, pi_lr=3e-4, vf_lr=1e-3):
 
 
 def fake_data(n, ac, obs_dim=14, act_dim=6):
-    """a batch like join_and_normalize returns: obs, act, ret, adv, logp, with
-    logp recorded under `ac` so the pre-update KL starts near 0."""
+    """
+    Docstring for fake_data:
+
+    a batch like join_and_normalize returns: obs, act, ret, adv, logp, with
+    logp recorded under `ac` so the pre-update KL starts near 0.
+    """
     obs = torch.randn(n, obs_dim)
     ret = torch.randn(n) * 5.0 + 2.0   # off unit scale, so value-norm has work to do
     adv = torch.randn(n)
@@ -98,8 +102,12 @@ def test_value_norm_stats_survive_save_load(tmp_path):
 
 
 def test_save_without_value_norm_loads_with_fresh_stats(tmp_path):
-    """a pre-Phase-11 save has no value_norm key; a fresh normalizer loading its
-    (absent) state stays the identity instead of crashing."""
+    """
+    Docstring for test_save_without_value_norm_loads_with_fresh_stats:
+
+    a pre-Phase-11 save has no value_norm key; a fresh normalizer loading its
+    (absent) state stays the identity instead of crashing.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     path = str(tmp_path / "old.pt")
     save_checkpoint(path, ac, pi_opt, vf_opt, epoch=0, lr_step=0)  # no value_norm
@@ -112,8 +120,12 @@ def test_save_without_value_norm_loads_with_fresh_stats(tmp_path):
 
 
 def test_value_norm_updates_from_batch_in_update():
-    """update_from_data folds the batch returns into the normalizer, so after the
-    update its mean/std track the (off-unit-scale) returns."""
+    """
+    Docstring for test_value_norm_updates_from_batch_in_update:
+
+    update_from_data folds the batch returns into the normalizer, so after the
+    update its mean/std track the (off-unit-scale) returns.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     rms = Running_mean_std()
     data = fake_data(600, ac)
@@ -125,9 +137,13 @@ def test_value_norm_updates_from_batch_in_update():
 
 
 def test_compute_loss_v_uses_normalized_target():
-    """with a normalizer whose stats match the returns, the critic (output ~0 at
+    """
+    Docstring for test_compute_loss_v_uses_normalized_target:
+
+    with a normalizer whose stats match the returns, the critic (output ~0 at
     init) sees a near-zero-mean target, so the loss is far smaller than the raw
-    MSE against returns centred at +2."""
+    MSE against returns centred at +2.
+    """
     ac, _, _ = make_ac_and_opts()
     data = fake_data(400, ac)
     rms = Running_mean_std()
@@ -157,8 +173,12 @@ def test_critic_passes_default_to_policy_passes():
 
 
 def test_n_minibatches_splits_the_batch():
-    """n_minibatches=4 still updates (four large chunks); a batch not divisible by
-    4 is handled (ceil)."""
+    """
+    Docstring for test_n_minibatches_splits_the_batch:
+
+    n_minibatches=4 still updates (four large chunks); a batch not divisible by
+    4 is handled (ceil).
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts()
     data = fake_data(1000, ac)   # 1000 / 4 = 250 per chunk
     info = update_from_data(ac, data, pi_opt, vf_opt, n_passes=2, n_minibatches=4,
@@ -191,10 +211,14 @@ def test_kl_to_teacher_positive_when_means_differ():
 
 
 def test_kl_term_does_not_pull_log_std_up():
-    """Phase 10 keeps a tight spread; the mean-only KL to a WIDE-spread teacher
+    """
+    Docstring for test_kl_term_does_not_pull_log_std_up:
+
+    Phase 10 keeps a tight spread; the mean-only KL to a WIDE-spread teacher
     must not raise log_std (that would undo Phase 10). Train a few updates with a
     strong KL coef toward a teacher whose log_std is wide and check the learner's
-    log_std does not climb toward the teacher's."""
+    log_std does not climb toward the teacher's.
+    """
     ac, pi_opt, vf_opt = make_ac_and_opts(pi_lr=1e-3)
     teacher, _, _ = make_ac_and_opts()
     with torch.no_grad():
@@ -229,7 +253,11 @@ def test_kl_teacher_term_reported():
 # ---- KL fade weight (the maths the loop applies) ----
 
 def kl_weight(epoch, epochs, kl_coef, fade_fraction):
-    """the exact expression ppo_train uses for the per-epoch KL-to-teacher weight."""
+    """
+    Docstring for kl_weight:
+
+    the exact expression ppo_train uses for the per-epoch KL-to-teacher weight.
+    """
     fade_epochs = max(1, int(epochs * fade_fraction))
     return kl_coef * max(0.0, 1.0 - epoch / fade_epochs)
 
