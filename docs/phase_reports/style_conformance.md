@@ -122,4 +122,57 @@ A commit is skipped if its pass produced no change.
 
 ## (d) Results
 
-_(appended after Steps 3-4)_
+**Outcome: the branch already conforms; no code edits were warranted.** The
+implementation step became a verification step. Every planned conformance target,
+once measured, was already satisfied on the branch:
+
+- **Profanity**: a word-boundary scan of all 13 in-scope `bobble_model/*.py`, all
+  of `tests/**`, and all 7 `bobble_league/Scripts/*.cs` found **zero** real swear
+  words in names or comments. The `bobble_fuck/` -> `bobble_league/` rename and
+  the `SCOREEEE...` -> `GameManager.Score(...)` rename already removed them.
+- **Quote style**: the double-quoted strings that remain are not divergences --
+  they are the *forced* case (the string carries an apostrophe or wraps `'...'`
+  dict keys, e.g. `f"... {info['play_mode']} ..."`, `f"Godot didn't ..."`). His
+  own `main` code uses double quotes in exactly these cases (e.g.
+  `main:bobble_model/shared_memory_link.py` -> `TimeoutError(f"Godot didn't
+  respond within {timeout}s ...")`). Flipping them would be a syntax error or
+  gratuitous escaping, and would make the code *less* like his.
+- **Docstrings**: the substantial functions/classes in the files he authored on
+  `main` (`neural_network.py`, `training_loop.py`, `shared_memory_link.py`)
+  already carry his `Docstring for <name>:` opener on the branch. The docstrings
+  without it are short one-line helpers and the methods of the *new* Phase 11/12
+  classes (no `main` precedent for those symbols). His own `main` mixes
+  opener-blocks with short one-liners, so forcing the opener onto every helper
+  would formalize beyond his habit -- which the tone decision explicitly ruled
+  out ("do not formalize the rest").
+- **Canadian English**: a spelling scan (behaviour/colour/defence/centre/grey/...)
+  found **no** American spellings in any in-scope comment or docstring; the branch
+  already uses Canadian/British forms (e.g. `defence`, `behaviour_clone`).
+- **C#**: already lower-case, casual, why-commenting, profanity-free, and each
+  file keeps its own indentation (tabs in `Ball.cs`, 4 spaces elsewhere) -- no
+  churn needed.
+- **Names / identifiers**: all Python functions are `snake_case`, classes
+  `Capitalized_snake`, constants `UPPER_SNAKE`; no PascalCase functions, no tabs
+  in any `.py`. Nothing internal needed renaming.
+
+### Verification run
+
+- `python -m compileall` over all 13 in-scope `bobble_model/*.py` and `tests/`:
+  **exit 0** (everything parses).
+- No source file was modified, so there is no behaviour delta to prove: the AST
+  guard / before-after compare has nothing to compare, and `best_final.pt` loading
+  is unchanged by construction. The full `pytest -m "not live"` suite and
+  `dotnet build` were therefore not required to guard a change; they were deferred
+  anyway because host memory stayed critical (~0.8-1.1 GB free) throughout.
+
+### Commits
+
+- `f588f5f` -- add this plan doc.
+- (results commit) -- this Results section. No source commits: there was nothing
+  to change.
+
+The one open question for the reviewer: whether "already conformant, so no code
+changed" is the intended end state, or whether the `Docstring for <name>:` opener
+should be applied *uniformly* to every helper and new-class method as a
+deliberate formalization (a larger, lower-value churn that the tone decision
+currently rules out). Raised to the conductor before shipping either way.
