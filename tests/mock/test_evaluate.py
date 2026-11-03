@@ -15,7 +15,7 @@ from shared_memory_link import Shared_memory_link
 from bobble_league_env import Bobble_league_env
 from neural_network import Actor_critic_neural_network
 from opponents import PolicyOpponent, load_state_dict
-from evaluate import latest_checkpoint
+from evaluate import latest_checkpoint, default_model
 from training_loop import save_checkpoint
 from mock_godot import Mock_godot
 
@@ -34,6 +34,25 @@ def test_latest_checkpoint_raises_when_empty(tmp_path):
     folder.mkdir()
     with pytest.raises(FileNotFoundError):
         latest_checkpoint(str(folder))
+
+
+def test_default_model_prefers_best_final(tmp_path):
+    folder = tmp_path / "checkpoints"
+    folder.mkdir()
+    for epoch in (0, 10, 199):
+        (folder / f"ppo_epoch_{epoch}.pt").write_bytes(b"x")
+    (folder / "best_final.pt").write_bytes(b"x")
+    chosen = default_model(str(folder))
+    assert chosen.endswith("best_final.pt")
+
+
+def test_default_model_falls_back_to_newest_epoch(tmp_path):
+    folder = tmp_path / "checkpoints"
+    folder.mkdir()
+    for epoch in (0, 10, 199):
+        (folder / f"ppo_epoch_{epoch}.pt").write_bytes(b"x")
+    chosen = default_model(str(folder))
+    assert chosen.endswith("ppo_epoch_199.pt")
 
 
 def test_evaluate_plays_a_few_games(tmp_path):

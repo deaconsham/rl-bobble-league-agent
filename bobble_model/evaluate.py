@@ -6,6 +6,9 @@ Start the Godot game first and pick the mode on GameManager.CurrentPlayMode.
                 python evaluate.py --opponent checkpoints/ppo_epoch_10.pt
   HUMAN_VS_AI : python evaluate.py --human
                 (you are Team A: left-drag to aim, right-click to end your turn)
+
+With no --checkpoint, both modes default to checkpoints/best_final.pt (the
+shipped Phase 14 champion), falling back to the newest ppo_epoch_*.pt.
 """
 import argparse
 import glob
@@ -25,9 +28,23 @@ def latest_checkpoint(folder='checkpoints'):
     return max(paths, key=lambda p: int(re.search(r'ppo_epoch_(\d+)\.pt$', p).group(1)))
 
 
+def default_model(folder='checkpoints'):
+    """The model used when --checkpoint is not given.
+
+    The shipped champion is checkpoints/best_final.pt (the Phase 14 best), so AI
+    play and --human default to it. If it is missing (a fresh clone with no final
+    model yet), fall back to the newest ppo_epoch_*.pt so a just-trained run still
+    just works."""
+    final = os.path.join(folder, 'best_final.pt')
+    if os.path.exists(final):
+        return final
+    return latest_checkpoint(folder)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--checkpoint', default=None, help='default: newest checkpoints/ppo_epoch_*.pt')
+    parser.add_argument('--checkpoint', default=None,
+                        help='default: checkpoints/best_final.pt, else newest checkpoints/ppo_epoch_*.pt')
     parser.add_argument('--episodes', type=int, default=10, help='0 = play until Ctrl+C')
     parser.add_argument('--opponent', default='chaser',
                         help='AI_VS_AI only: chaser | random | still | defender | replay | none | path/to/checkpoint.pt')
@@ -36,7 +53,7 @@ def main():
     parser.add_argument('--max-ep-len', type=int, default=200)
     args = parser.parse_args()
 
-    ckpt = args.checkpoint or latest_checkpoint()
+    ckpt = args.checkpoint or default_model()
     # --human: sample with a shrunk spread (std x0.3) so the AI is not perfectly
     # repeatable and one fixed counter does not always work (R40). AI_VS_AI eval
     # keeps the deterministic mean unless --stochastic is passed.
