@@ -38,7 +38,11 @@ class Running_mean_std:
         self.count = float(epsilon)
 
     def update(self, x):
-        """Fold a batch of scalars in (numpy array or torch tensor)."""
+        """
+        Docstring for update:
+
+        Fold a batch of scalars in (numpy array or torch tensor).
+        """
         if isinstance(x, torch.Tensor):
             x = x.detach().cpu().numpy()
         x = np.asarray(x, dtype=np.float64).ravel()
@@ -60,29 +64,49 @@ class Running_mean_std:
 
     @property
     def std(self):
-        """Standard deviation with a small floor so normalize never divides by 0."""
+        """
+        Docstring for std:
+
+        Standard deviation with a small floor so normalize never divides by 0.
+        """
         return float(np.sqrt(self.var) + 1e-8)
 
     def normalize(self, x):
-        """(x - mean) / std. Takes/returns a torch tensor or a numpy array."""
+        """
+        Docstring for normalize:
+
+        (x - mean) / std. Takes/returns a torch tensor or a numpy array.
+        """
         if isinstance(x, torch.Tensor):
             return (x - self.mean) / self.std
         return (np.asarray(x) - self.mean) / self.std
 
     def denormalize(self, x):
-        """std * x + mean: turn a normalized value back to the raw scale (so
-        explained variance and logging stay on the real return scale)."""
+        """
+        Docstring for denormalize:
+
+        std * x + mean: turn a normalized value back to the raw scale (so
+        explained variance and logging stay on the real return scale).
+        """
         if isinstance(x, torch.Tensor):
             return x * self.std + self.mean
         return np.asarray(x) * self.std + self.mean
 
     def state(self):
-        """Plain dict for the checkpoint."""
+        """
+        Docstring for state:
+
+        Plain dict for the checkpoint.
+        """
         return {"mean": self.mean, "var": self.var, "count": self.count}
 
     def load_state(self, state):
-        """Restore from a checkpoint dict. A None / empty state leaves the fresh
-        identity stats in place (an old save without value-norm stats)."""
+        """
+        Docstring for load_state:
+
+        Restore from a checkpoint dict. A None / empty state leaves the fresh
+        identity stats in place (an old save without value-norm stats).
+        """
         if not state:
             return
         self.mean = float(state.get("mean", 0.0))
@@ -117,10 +141,13 @@ class RewardScaler:
 
     def scale(self, rewards, dones):
         """
+        Docstring for scale:
+
         Update the running discounted-return std from this step's rewards and
         return the SCALED rewards. rewards/dones are length-n_games arrays. A game
         whose episode ended (done True) has its running return reset to 0 AFTER
         this step, like the standard implementation.
+
         """
         rewards = np.asarray(rewards, dtype=np.float64).reshape(-1)
         dones = np.asarray(dones, dtype=bool).reshape(-1)
@@ -141,13 +168,21 @@ class RewardScaler:
         return scaled.astype(np.float32)
 
     def state(self):
-        """Plain dict for the checkpoint (just the return stats; the per-game
-        running returns are transient and not saved)."""
+        """
+        Docstring for state:
+
+        Plain dict for the checkpoint (just the return stats; the per-game
+        running returns are transient and not saved).
+        """
         return {"ret_rms": self.ret_rms.state(), "gamma": self.gamma}
 
     def load_state(self, state):
-        """Restore the return stats. A None / empty state leaves the identity
-        (std ~1 = no scaling), so an old save loads and re-learns the scale."""
+        """
+        Docstring for load_state:
+
+        Restore the return stats. A None / empty state leaves the identity
+        (std ~1 = no scaling), so an old save loads and re-learns the scale.
+        """
         if not state:
             return
         self.ret_rms.load_state(state.get("ret_rms"))
@@ -203,8 +238,12 @@ class Input_norm(nn.Module):
 
     @torch.no_grad()
     def update(self, x):
-        """Fold a batch of observations (N, dim) into the running stats with a
-        per-dimension Welford parallel merge. Training only."""
+        """
+        Docstring for update:
+
+        Fold a batch of observations (N, dim) into the running stats with a
+        per-dimension Welford parallel merge. Training only.
+        """
         x = torch.as_tensor(x, dtype=torch.float32)
         if x.ndim == 1:
             x = x.unsqueeze(0)
@@ -225,8 +264,12 @@ class Input_norm(nn.Module):
         self.count.copy_(total)
 
     def forward(self, x):
-        """Normalize: (x - mean) / sqrt(var), clipped. No grad flows to the stats
-        (they are buffers), so this is a fixed transform for the optimizer."""
+        """
+        Docstring for forward:
+
+        Normalize: (x - mean) / sqrt(var), clipped. No grad flows to the stats
+        (they are buffers), so this is a fixed transform for the optimizer.
+        """
         std = torch.sqrt(self.var + 1e-8)
         out = (x - self.mean) / std
         if self.clip is not None:
@@ -311,9 +354,13 @@ class Actor_critic_neural_network(nn.Module):
         self.log_std = nn.Parameter(INIT_LOG_STD * torch.ones(act_dim))
 
     def norm_obs(self, obs):
-        """Apply the shared running input-normalizer (Phase 12, step 2). A fixed
+        """
+        Docstring for norm_obs:
+
+        Apply the shared running input-normalizer (Phase 12, step 2). A fixed
         transform (the stats are buffers); call it on every obs before pi_net /
-        v_net so direct callers (kl_to_teacher, PolicyOpponent) match forward()."""
+        v_net so direct callers (kl_to_teacher, PolicyOpponent) match forward().
+        """
         return self.obs_norm(obs)
 
     def forward(self, obs):
@@ -376,6 +423,8 @@ class Actor_critic_neural_network(nn.Module):
 
 def load_model_state(ac, state_dict):
     """
+    Docstring for load_model_state:
+
     Load a saved model state into an Actor_critic_neural_network, tolerating a
     PRE-Phase-12 save that has no input-normalizer buffers (Phase 12, step 2).
 
@@ -385,6 +434,7 @@ def load_model_state(ac, state_dict):
     buffers (any other missing/unexpected key is a real mismatch and is
     re-raised). When the buffers are absent the net keeps its fresh identity
     stats, so an old save loads and the run re-learns the input scale.
+
     """
     result = ac.load_state_dict(state_dict, strict=False)
     allowed_prefix = "obs_norm."

@@ -12,7 +12,11 @@ PATH_ENV_VAR = "BOBBLE_SHM_PATH"
 
 
 def resolve_path():
-    """Same rule as SharedMemory.cs: env var wins, else <temp dir>/bobble_league_mmap.dat."""
+    """
+    Docstring for resolve_path:
+
+    Same rule as SharedMemory.cs: env var wins, else <temp dir>/bobble_league_mmap.dat.
+    """
     return os.environ.get(PATH_ENV_VAR) or os.path.join(tempfile.gettempdir(), DEFAULT_FILE_NAME)
 
 
@@ -120,17 +124,23 @@ class Shared_memory_link:
 
     def write_action(self, action):
         """
+        Docstring for write_action:
+
         Args:
             action: 6 float32 values [a1, p1, a2, p2, a3, p3] (angle+power), learner's frame
+
         """
         data = np.asarray(action, dtype=np.float32).reshape(self.ACT_DIM).tobytes()
         self.buf[self.ACT_OFFSET:self.ACT_OFFSET + self.ACT_SIZE] = data
 
     def write_opponent_action(self, action):
         """
+        Docstring for write_opponent_action:
+
         Args:
             action: 6 float32 values in the OPPONENT's own frame, or None so the
                     opponent stands still (and is ignored in HUMAN_VS_AI anyway).
+
         """
         if action is None:
             self.buf[self.OPP_VALID_OFFSET] = 0
@@ -140,16 +150,24 @@ class Shared_memory_link:
         self.buf[self.OPP_VALID_OFFSET] = 1
 
     def request_step(self):
-        """Tell Godot to play a turn. Call after write_action / write_opponent_action."""
+        """
+        Docstring for request_step:
+
+        Tell Godot to play a turn. Call after write_action / write_opponent_action.
+        """
         self.buf[self.STEP_REQ_OFFSET] = 1
 
     def request_reset(self, random_start=False):
-        """Signal Godot to reset the environment.
+        """
+        Docstring for request_reset:
+
+        Signal Godot to reset the environment.
 
         random_start (Phase 12, step 1): when True, set the byte-91 flag so Godot
         scatters this reset to a random legal non-overlapping layout instead of
         kickoff. The flag is written BEFORE the reset request so Godot sees it when
         it handles the reset, and cleared otherwise so a plain reset stays kickoff.
+
         """
         self.buf[self.RANDOM_START_OFFSET] = 1 if random_start else 0
         self.buf[self.RESET_REQ_OFFSET] = 1
@@ -157,7 +175,11 @@ class Shared_memory_link:
     # ---- godot -> python ----
 
     def read_observation(self):
-        """Returns: numpy array of 14 float32 values (world units, learner's frame)."""
+        """
+        Docstring for read_observation:
+
+        Returns: numpy array of 14 float32 values (world units, learner's frame).
+        """
         obs_bytes = self.buf[self.OBS_OFFSET:self.OBS_OFFSET + self.OBS_SIZE]
         return np.frombuffer(obs_bytes, dtype=np.float32).copy()
 
@@ -172,18 +194,30 @@ class Shared_memory_link:
         return self.buf[self.LEARNER_TEAM_OFFSET]
 
     def read_scorer(self):
-        """0 = nobody scored this turn, 1 = learner scored, 2 = opponent scored."""
+        """
+        Docstring for read_scorer:
+
+        0 = nobody scored this turn, 1 = learner scored, 2 = opponent scored.
+        """
         return self.buf[self.SCORER_OFFSET]
 
     def read_turn_seconds(self):
-        """Game seconds the last turn took to settle (0 right after a reset)."""
+        """
+        Docstring for read_turn_seconds:
+
+        Game seconds the last turn took to settle (0 right after a reset).
+        """
         raw = self.buf[self.TURN_SECONDS_OFFSET:self.TURN_SECONDS_OFFSET + self.TURN_SECONDS_SIZE]
         return struct.unpack('<f', raw)[0]
 
     def read_oob_reset(self):
-        """True when the turn Godot just finished hit an out-of-bounds kickoff
+        """
+        Docstring for read_oob_reset:
+
+        True when the turn Godot just finished hit an out-of-bounds kickoff
         (Phase 12, step 1). The positions jump back to kickoff mid-turn, so the
-        caller skips the position-difference shaping over that turn."""
+        caller skips the position-difference shaping over that turn.
+        """
         return self.buf[self.OOB_RESET_OFFSET] == 1
 
     def read_play_mode(self):
@@ -199,23 +233,38 @@ class Shared_memory_link:
             time.sleep(self.poll_interval)
 
     def wait_for_step(self, timeout=120.0):
-        """Wait until Godot clears the step flag. timeout=None waits forever (human play)."""
+        """
+        Docstring for wait_for_step:
+
+        Wait until Godot clears the step flag. timeout=None waits forever (human play).
+        """
         self._wait_flag_clear(self.STEP_REQ_OFFSET, timeout, "finish the turn")
 
     def step_ready(self):
         """
+        Docstring for step_ready:
+
         Non-blocking check: has Godot finished the requested turn? True once it has
         cleared the step flag. Used by Vector_env to collect each game the moment it
         is ready instead of waiting on the games in a fixed order.
+
         """
         return self.buf[self.STEP_REQ_OFFSET] == 0
 
     def wait_for_reset(self, timeout=120.0):
-        """Wait for Godot to complete the reset. timeout=None waits forever."""
+        """
+        Docstring for wait_for_reset:
+
+        Wait for Godot to complete the reset. timeout=None waits forever.
+        """
         self._wait_flag_clear(self.RESET_REQ_OFFSET, timeout, "reset")
 
     def close(self):
-        """Unmap and close. The file stays on disk so Godot keeps working."""
+        """
+        Docstring for close:
+
+        Unmap and close. The file stays on disk so Godot keeps working.
+        """
         if getattr(self, "buf", None) is not None:
             self.buf.close()
             self.buf = None

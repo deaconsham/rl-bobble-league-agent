@@ -183,7 +183,11 @@ class Opponent_buffer:
         self.path_start = 0
 
     def store(self, obs, act, rew, val, logp):
-        """Append one opponent turn (obs/act already in the opponent frame)."""
+        """
+        Docstring for store:
+
+        Append one opponent turn (obs/act already in the opponent frame).
+        """
         self.obs.append(np.asarray(obs, dtype=np.float32))
         self.act.append(np.asarray(act, dtype=np.float32))
         self.rew.append(float(rew))
@@ -192,9 +196,12 @@ class Opponent_buffer:
 
     def finish_path(self, last_val=0.0):
         """
+        Docstring for finish_path:
+
         Close the open path with GAE-Lambda, same maths as PPO_buffer.finish_path.
         last_val bootstraps a cut (truncated) path from the critic; a real goal
         passes 0. Does nothing when no turns were stored since the last finish.
+
         """
         n = len(self.rew) - self.path_start
         if n <= 0:
@@ -214,10 +221,13 @@ class Opponent_buffer:
 
     def get(self, device='cpu'):
         """
+        Docstring for get:
+
         Return the FINISHED turns as a data dict (advantages NOT normalized here;
         join_and_normalize normalizes over the whole batch). Only fully-finished
         paths are returned, so call finish_path() before get(). Clears the buffer.
         An empty buffer returns correctly-shaped zero-row arrays.
+
         """
         n = len(self.ret)
         obs_dim = self.obs[0].shape[-1] if self.obs else 14
@@ -336,26 +346,42 @@ class Linear_lr_schedule:
         self.apply()
 
     def frac_left(self):
-        """fraction of the run still to go, clamped to [lr_floor_frac, 1].
+        """
+        Docstring for frac_left:
+
+        fraction of the run still to go, clamped to [lr_floor_frac, 1].
 
         The lower clamp is the LR floor: the ramp bottoms out at lr_floor_frac of
-        the start rate rather than decaying all the way to 0."""
+        the start rate rather than decaying all the way to 0.
+        """
         left = (self.total - self.step_count) / self.total
         return max(self.lr_floor_frac, min(1.0, left))
 
     def current_lrs(self):
-        """the LRs the schedule wants right now (one per optimizer)."""
+        """
+        Docstring for current_lrs:
+
+        the LRs the schedule wants right now (one per optimizer).
+        """
         f = self.frac_left()
         return [base * f for base in self.base_lrs]
 
     def apply(self):
-        """write the current LRs onto the optimizers' param groups."""
+        """
+        Docstring for apply:
+
+        write the current LRs onto the optimizers' param groups.
+        """
         for opt, lr in zip(self.optimizers, self.current_lrs()):
             for group in opt.param_groups:
                 group['lr'] = lr
 
     def advance(self):
-        """call once per update (after it) to move one step down the ramp."""
+        """
+        Docstring for advance:
+
+        call once per update (after it) to move one step down the ramp.
+        """
         self.step_count += 1
         self.apply()
 
@@ -363,6 +389,8 @@ def update(ac, buf, pi_optimizer, vf_optimizer, train_pi_iters=80,
            train_v_iters=80, target_kl=0.02, clip_ratio=0.2, device='cpu',
            minibatch_size=256, n_passes=10, ent_coef=0.0, max_grad_norm=0.5):
     """
+    Docstring for update:
+
     Perform a PPO update on a single full buffer.
 
     Thin wrapper: pulls the buffer (advantages normalized for the single-game
@@ -377,6 +405,7 @@ def update(ac, buf, pi_optimizer, vf_optimizer, train_pi_iters=80,
         clip_ratio: epsilon for PPO clipping
         device: device for the tensors
         minibatch_size, n_passes, ent_coef, max_grad_norm: Phase 3 knobs
+
     """
     data = buf.get(device=device)
     return update_from_data(ac, data, pi_optimizer, vf_optimizer, train_pi_iters,
@@ -789,9 +818,13 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
         best_tracker = Best_tracker()
 
         def _relaunch_live_elo():
-            """Restart the spare Godot after it wedges and hand back a fresh env.
+            """
+            Docstring for _relaunch_live_elo:
+
+            Restart the spare Godot after it wedges and hand back a fresh env.
             Returns None when there is no launcher to restart it (then the check
-            bails out cleanly rather than hanging)."""
+            bails out cleanly rather than hanging).
+            """
             if live_elo_launcher is None:
                 return None
             try:
@@ -812,13 +845,17 @@ def ppo_train(env_fn=None, actor_critic=Actor_critic_neural_network, ac_kwargs=d
                 return None
 
     def run_live_elo(epoch):
-        """Score the current net on the spare game and fold the result into
+        """
+        Docstring for run_live_elo:
+
+        Score the current net on the spare game and fold the result into
         best.pt / roll-back. Returns the mean-move Elo (or None when off).
 
         The whole check is bounded by live_elo_check_budget (Phase 12 review fix):
         a wedged spare game is relaunched once, and once the budget is spent the
         remaining games are scored draws so the check returns instead of idling the
-        training process for minutes at a decade boundary."""
+        training process for minutes at a decade boundary.
+        """
         import time as _time
         deadline = _time.monotonic() + live_elo_check_budget
         state = {k: v.detach().cpu().clone() for k, v in ac.state_dict().items()}
