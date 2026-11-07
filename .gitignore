@@ -122,6 +122,22 @@ platform/web/node_modules/
 # Misc
 *.debug
 
+#######################
+### AI coding tools ###
+#######################
+
+# agent settings, memory and worktrees (Claude Code keeps its worktrees in .claude/worktrees/)
+.claude/
+CLAUDE.local.md
+.kiro/
+.cursor/
+.windsurf/
+.codex/
+.gemini/
+.continue/
+.aider*
+.worktrees/
+
 #############################
 ### IDE and tool specific ###
 #############################
@@ -416,3 +432,27 @@ $RECYCLE.BIN/
 # test area
 temp_data/*
 !temp_data/.gitkeep
+
+################################
+### Bobble League RL project ###
+################################
+
+# training outputs: run folders, logs, tensorboard, old runs
+bobble_model/*_run/
+bobble_model/old_runs/
+bobble_model/runs/
+bobble_model/checkpoints/
+
+# Models/ keeps only the shipped models in git: best_final.pt (to play against)
+# and best_p11_ln.pt (the starting point for fine-tuning)
+bobble_model/Models/*
+!bobble_model/Models/best_final.pt
+!bobble_model/Models/best_p11_ln.pt
+
+# stale project backups
+*.csproj.old
+*.csproj.old.*
+*.blend1
+
+# godot export output (see bobble_league/export_presets.cfg)
+/build/

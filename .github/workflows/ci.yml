@@ -1,0 +1,42 @@
+# checks every push and pull request: the python tests that don't need godot,
+# and that the game's C# still compiles. windows runners match where the game is played.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python tests (${{ matrix.python }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: bobble_model/requirements.txt
+      # the windows torch wheel on pypi is cpu-only, which is all the tests need
+      - run: pip install -r bobble_model/requirements.txt
+      - run: python -m pytest -m "not live" -q
+
+  game-build:
+    name: Game build (C#)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      # Godot.NET.Sdk comes from nuget, so this needs no godot install
+      - run: dotnet build bobble_league/BobbleLeague.csproj
