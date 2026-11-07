@@ -1,3 +1,7 @@
+/*
+Goal trigger. Tells the game manager who scored when the ball enters.
+*/
+
 using Godot;
 using System;
 

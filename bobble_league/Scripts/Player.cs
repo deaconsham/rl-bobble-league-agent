@@ -1,3 +1,8 @@
+/*
+A player. Launches with an aim and power, kicks the ball on contact, and brakes
+smoothly to a stop.
+*/
+
 using Godot;
 using System;
 
@@ -10,11 +15,15 @@ public partial class Player : RigidBody3D
     [Export] float kickForceCoefficient; // name implies scaling with speed but not currently
     [Export] float verticallKickForce;
     [Export] float kickSpeedThreshold;
-    [Export] float speedThreshold;
 
-    // let the game manager set the stop speed from the play mode (training vs human)
-    public void SetStopSpeed(float value) {
-        speedThreshold = value;
+    // same brake as the ball (Ball.Brake), set by the game manager
+    float brakeSpeed = 1.0f;
+    float brakeDecel = 3.0f;
+    const float RestSpeed = 0.05f;
+
+    public void SetBrake(float speed, float decel) {
+        brakeSpeed = speed;
+        brakeDecel = decel;
     }
 
     [ExportGroup("Visuals")] 
@@ -91,11 +100,7 @@ public partial class Player : RigidBody3D
         }
     }
     
-    public override void _PhysicsProcess(double delta) {
-        if (LinearVelocity.Length() < speedThreshold) {
-            LinearVelocity = new Vector3(0, 0, 0);
-            AngularVelocity = new Vector3(0, 0, 0);
-        }
-        
+    public override void _IntegrateForces(PhysicsDirectBodyState3D state) {
+        Ball.Brake(state, brakeSpeed, brakeDecel, RestSpeed);
     }
 }

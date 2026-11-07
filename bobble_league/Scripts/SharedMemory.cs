@@ -1,13 +1,15 @@
+/*
+Shared memory bridge between Godot and Python for RL training.
+Uses a file-backed memory map so it works on Windows, macOS and Linux
+(named maps without a file are Windows-only in .NET).
+*/
+
 using Godot;
 using System;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Threading;
 
-// bridge between godot and python for RL training.
-// uses a FILE-BACKED memory map so it works on Windows, macOS and Linux
-// (named maps without a file are Windows-only in .NET).
-//
 // Protocol v5 layout (124 bytes). Must match bobble_model/shared_memory_link.py.
 //   0-55   obs, 14 x f32           godot -> python  (learner's frame, see DataManager)
 //   56-79  learner action, 6 x f32 python -> godot  [a1,p1,a2,p2,a3,p3] angle+power, learner's frame
@@ -27,7 +29,7 @@ using System.Threading;
 //   120-123 turn seconds, f32      godot -> python  (game seconds the last turn took to settle)
 // v4 only GREW the buffer with turn-length telemetry; the action/obs contract is
 // unchanged, so checkpoints keep their own action_format tag (still 3). v5 claims
-// two pad bytes (Phase 12, step 1): byte 91 is a python->godot random-start flag
+// two pad bytes: byte 91 is a python->godot random-start flag
 // and byte 117 a godot->python out-of-bounds flag. Both only steer bodies /
 // telemetry, so the action/obs contract is unchanged and action_format stays 3.
 public class SharedMemory : IDisposable {
@@ -164,7 +166,15 @@ public class SharedMemory : IDisposable {
         return true;
     }
 
-    void WritePayload(float[] observation, float reward, bool done, int learnerTeam, int scorer, int playMode, float turnSeconds) {
+    void WritePayload(
+        float[] observation,
+        float reward,
+        bool done,
+        int learnerTeam,
+        int scorer,
+        int playMode,
+        float turnSeconds)
+    {
         if (observation.Length != OBS_DIM) {
             GD.PrintErr($"Observation needs {OBS_DIM} values, got {observation.Length}");
             return;
@@ -186,7 +196,16 @@ public class SharedMemory : IDisposable {
     // took to settle in game seconds, so python can watch the turn-length spread.
     // oobReset (v5) is 1 when this turn hit an out-of-bounds kickoff, so python
     // can skip the position shaping over the jump.
-    public void SendStepResults(float[] observation, float reward, bool done, int learnerTeam, int scorer, int playMode, float turnSeconds, bool oobReset = false) {
+    public void SendStepResults(
+        float[] observation,
+        float reward,
+        bool done,
+        int learnerTeam,
+        int scorer,
+        int playMode,
+        float turnSeconds,
+        bool oobReset = false)
+    {
         if (!IsReady) return;
         WritePayload(observation, reward, done, learnerTeam, scorer, playMode, turnSeconds);
         _accessor.Write(OOB_RESET_OFFSET, (byte)(oobReset ? 1 : 0));

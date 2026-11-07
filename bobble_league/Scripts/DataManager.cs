@@ -1,3 +1,8 @@
+/*
+Builds the observation (ball and player positions, in the learner's frame)
+and hands it to the shared memory bridge.
+*/
+
 using Godot;
 using System;
 using System.IO;
@@ -24,7 +29,16 @@ public partial class DataManager : Node {
     // turnSeconds is how long this turn took to settle in game seconds (0 on a reset).
     // oobReset (v5) is true when this turn hit an out-of-bounds kickoff, so python
     // skips the position shaping over the jump.
-    public void Export(bool done, float reward, bool reset, int learnerTeam, int scorer, int playMode, float turnSeconds = 0f, bool oobReset = false) {
+    public void Export(
+        bool done,
+        float reward,
+        bool reset,
+        int learnerTeam,
+        int scorer,
+        int playMode,
+        float turnSeconds = 0f,
+        bool oobReset = false)
+    {
         if (memory == null || !memory.IsReady) return;
         float[] obs = BuildObservation(learnerTeam);
 

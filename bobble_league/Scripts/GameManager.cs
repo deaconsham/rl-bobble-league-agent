@@ -1,3 +1,7 @@
+/*
+Runs the match: mouse input, turns, goals, resets, and the AI turn loop with Python.
+*/
+
 using Godot;
 using System.Collections.Generic;
 using System;
@@ -33,16 +37,18 @@ public partial class GameManager : Node
     [Export(PropertyHint.Range, "1,128,1")] public float AIvsAITimeScale = 8f;
 
     // a turn that never settles gets ended after this many game seconds.
-    // the longest turn seen in phase 7 was 7.6 s, so 10 s ends only a stuck turn
+    // the longest normal turn is ~8 s, so 10 s ends only a stuck turn
     [Export] public float MaxTurnSeconds = 10f;
 
-    // the "stopped" speed below which a body is treated as settled, so a turn can
-    // end. a higher value ends ai_vs_ai turns sooner (worth it for training speed);
-    // human games keep the slower, nicer-feeling value. applied at runtime from the
-    // play mode, so the scene's own value is only a fallback.
-    [Export] public float TrainingStopSpeed = 1.0f;
-    [Export] public float HumanStopSpeed = 0.3f;
-    float StopSpeed => CurrentPlayMode == PlayMode.AI_VS_AI ? TrainingStopSpeed : HumanStopSpeed;
+    // under BrakeSpeed (m/s) the ball and players slow at BrakeDecel (m/s^2) until
+    // they stop. same for every mode so the AI plays humans in the physics it trained in
+    // command line: --brake-speed=N --brake-decel=N
+    [ExportGroup("Settling")]
+    [Export] public float BrakeSpeed = 1.0f;
+    [Export] public float BrakeDecel = 3.0f;
+    // physics ticks in a row with everything still before a turn counts as over
+    [Export] public int SettleTicks = 3;
+    int stillTicks;
 
     // arena is scaled 0.5: side walls at x = +-10, back of the nets at z = +-18.5
     [Export] public float FieldHalfX = 10f;
@@ -62,9 +68,13 @@ public partial class GameManager : Node
     float stepReward;
     bool currentDone;
     int lastScorer; // 0 nobody, 1 learner, 2 opponent
+    // the goal reset waits for the next tick. freeing bodies inside the goal's
+    // signal breaks jolt ("ref_count <= 0" errors)
+    bool goalResetPending;
     bool turnHitOob; // this turn went out of bounds and was kicked back to centre
+    SettleCheck settleCheck; // only with --settle-check, see SettleCheck.cs
 
-    // Phase 12, step 1: random-start layouts. seeded per process so parallel
+    // random-start layouts. seeded per process so parallel
     // Godots do not all scatter to the same board; python decides WHICH resets
     // are random (byte 91), Godot decides the positions.
     readonly RandomNumberGenerator rng = new RandomNumberGenerator();
@@ -80,18 +90,18 @@ public partial class GameManager : Node
     public override void _Ready() {
         rng.Randomize();
         ReadCommandLine();
-        ApplyStopSpeed();
+        if (SettleCheck.Requested()) settleCheck = new SettleCheck();
+        ApplyBrake();
         if (CurrentPlayMode == PlayMode.AI_VS_AI && AIvsAITimeScale > 1f) {
             SetTimeScale(AIvsAITimeScale);
         }
     }
 
-    // push the mode's stop speed onto the ball and every current player. the ball
-    // is set once; players are respawned each turn, so Spawn re-applies it to each
-    void ApplyStopSpeed() {
-        if (ball is Ball b) b.SetStopSpeed(StopSpeed);
+    // players are respawned on resets, so the spawners set it on each new one too
+    void ApplyBrake() {
+        if (ball is Ball b) b.SetBrake(BrakeSpeed, BrakeDecel);
         foreach (Node node in players.GetChildren()) {
-            if (node is Player p) p.SetStopSpeed(StopSpeed);
+            if (node is Player p) p.SetBrake(BrakeSpeed, BrakeDecel);
         }
     }
 
@@ -107,6 +117,14 @@ public partial class GameManager : Node
                     GD.PrintErr($"Unknown --mode '{mode}'");
                 }
             }
+            else if (arg.StartsWith("--brake-speed=")) {
+                if (TryParseArg(arg, out float v) && v >= 0f) BrakeSpeed = v;
+                else GD.PrintErr($"Bad {arg}, needs a number >= 0");
+            }
+            else if (arg.StartsWith("--brake-decel=")) {
+                if (TryParseArg(arg, out float v) && v > 0f) BrakeDecel = v;
+                else GD.PrintErr($"Bad {arg}, needs a number > 0");
+            }
             else if (arg.StartsWith("--timescale=")) {
                 string value = arg.Substring("--timescale=".Length);
                 bool ok = float.TryParse(value, System.Globalization.NumberStyles.Float,
@@ -119,6 +137,13 @@ public partial class GameManager : Node
                 }
             }
         }
+    }
+
+    // the number in --name=value, same on every locale
+    static bool TryParseArg(string arg, out float value) {
+        string text = arg.Substring(arg.IndexOf('=') + 1);
+        return float.TryParse(text, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
     }
 
     void SetTimeScale(float scale) {
@@ -269,7 +294,7 @@ public partial class GameManager : Node
         }
 
         GD.Print("team: " + team + " scored");
-        Reset();
+        goalResetPending = true;
         jumps_care.SetVisible(true);
         if (jumps_care.Texture is AnimatedTexture animatedTexture) {
             animatedTexture.CurrentFrame = 0;
@@ -280,12 +305,13 @@ public partial class GameManager : Node
         Reset(false);
     }
 
-    // randomStart (Phase 12, step 1): scatter the ball and all six players to a
+    // randomStart: scatter the ball and all six players to a
     // random legal non-overlapping layout instead of kickoff, so the AI also sees
     // odd boards (defending near its own goal, a scramble). A goal reset and an
     // out-of-bounds reset always use kickoff (randomStart false); only a
     // python-requested env reset with byte 91 set scatters.
     void Reset(bool randomStart) {
+        settleCheck?.OnReset();
         foreach (Node node in players.GetChildren()) {
             node.Free();
         }
@@ -309,7 +335,7 @@ public partial class GameManager : Node
             else if (spawn.Team == 2) mesh.SetSurfaceOverrideMaterial(0, TeamB);
             
             player.team = spawn.Team;
-            player.SetStopSpeed(StopSpeed);
+            player.SetBrake(BrakeSpeed, BrakeDecel);
             
             players.AddChild(player);
         }
@@ -335,7 +361,7 @@ public partial class GameManager : Node
             else if (spawn.Team == 2) mesh.SetSurfaceOverrideMaterial(0, TeamB);
 
             player.team = spawn.Team;
-            player.SetStopSpeed(StopSpeed);
+            player.SetBrake(BrakeSpeed, BrakeDecel);
 
             players.AddChild(player);
         }
@@ -391,6 +417,15 @@ public partial class GameManager : Node
         return ball == null || new Vector2(ball.LinearVelocity.X, ball.LinearVelocity.Z).Length() < 0.01f;
     }
 
+    // every live player in scene-tree order (both teams)
+    List<Player> AllPlayers() {
+        List<Player> list = new List<Player>();
+        foreach (Node node in players.GetChildren()) {
+            if (!node.IsQueuedForDeletion() && node is Player p) list.Add(p);
+        }
+        return list;
+    }
+
     // same order DataManager uses, so action i goes to the player in obs slot i
     List<Player> TeamPlayers(int team) {
         List<Player> list = new List<Player>();
@@ -402,6 +437,11 @@ public partial class GameManager : Node
     }
 
     public override void _PhysicsProcess(double delta) {
+        if (goalResetPending) {
+            goalResetPending = false;
+            Reset();
+        }
+
         if (isSimulating) {
             simTime += delta;
             // something that leaves the pitch can never settle, so go back to kickoff (no reward)
@@ -410,9 +450,13 @@ public partial class GameManager : Node
                 turnHitOob = true;   // tell python to skip this turn's position shaping
                 Reset();
             }
+            // a few still ticks in a row, so a mid-bounce 0 can't end the turn
+            stillTicks = StationaryBall() && StationaryPlayers() ? stillTicks + 1 : 0;
+            settleCheck?.OnSimTick(ball, AllPlayers());
             bool timedOut = simTime > MaxTurnSeconds;
             if (timedOut) LogMovingBodies();
-            if (timedOut || (StationaryBall() && StationaryPlayers())) {
+            if (timedOut || stillTicks >= SettleTicks) {
+                settleCheck?.OnExport(ball, AllPlayers(), turn, simTime, timedOut);
                 // only the goal reward (+1/-1/0) comes from here, python adds the shaping.
                 // simTime is how long the turn took to settle in game seconds.
                 dataManager.Export(currentDone, stepReward, false, LearnerTeam, lastScorer, (int)CurrentPlayMode, (float)simTime, turnHitOob);
@@ -427,8 +471,11 @@ public partial class GameManager : Node
 
         if (CurrentPlayMode == PlayMode.HUMAN_VS_HUMAN) return; // no python here
 
+        settleCheck?.OnWaitTick(ball, AllPlayers());
+
         // handle resets before waiting on the human so env.reset() doesn't use up a right click
         if (dataManager.IsResetRequested()) {
+            settleCheck?.Flush();
             // v5: python may ask (byte 91) for a scattered random layout here
             Reset(dataManager.IsRandomStartRequested());
             stepReward = 0;
@@ -448,6 +495,7 @@ public partial class GameManager : Node
         if (!dataManager.TryReadStep(out float[] action, out float[] opponentAction)) {
             return;
         }
+        settleCheck?.Flush();
 
         ApplyTeamAction(action, LearnerTeam);
         if (CurrentPlayMode == PlayMode.AI_VS_AI) {
@@ -462,6 +510,8 @@ public partial class GameManager : Node
         foreach (Player p in TeamPlayers(1)) p.Launch();
         foreach (Player p in TeamPlayers(2)) p.Launch();
         simTime = 0;
+        stillTicks = 0;
+        turn++;
         isSimulating = true;
     }
 

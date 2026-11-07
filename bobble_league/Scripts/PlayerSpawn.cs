@@ -1,3 +1,7 @@
+/*
+A kickoff spot and the team that starts there.
+*/
+
 using Godot;
 using System;
 

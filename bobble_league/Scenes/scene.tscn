@@ -184,7 +184,6 @@ continuous_cd = true
 linear_damp = 0.3
 angular_damp = 0.2
 script = ExtResource("5_mn0nn")
-speedThreshold = 1.0
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Dynamic/Ball" unique_id=986913239]
 shape = SubResource("SphereShape3D_drvgu")

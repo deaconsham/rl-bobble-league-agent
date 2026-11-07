@@ -30,3 +30,7 @@ project/assembly_name="BobbleLeague"
 [physics]
 
 3d/physics_engine="Jolt Physics"
+
+[threading]
+
+worker_pool/max_threads.editor_runtime=1
