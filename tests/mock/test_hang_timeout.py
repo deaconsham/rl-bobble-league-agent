@@ -26,12 +26,12 @@ def test_hung_game_times_out_then_restarts(tmp_path):
 
         obs, r, term, trunc, infos = env.step(actions)
         assert trunc[2]
-        assert infos[2]["restarted"] is True
+        assert infos[2]['restarted'] is True
         assert launcher.launch_counts[2] == 2  # relaunched (fresh, not hung)
         assert env.restart_counts[2] == 1
 
         # the relaunched game is healthy: the next step clears normally
         obs, r, term, trunc, infos = env.step(actions)
-        assert infos[2]["restarted"] is False
+        assert infos[2]['restarted'] is False
     finally:
         env.close()

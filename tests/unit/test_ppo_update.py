@@ -1,5 +1,5 @@
 """
-T1: one PPO update on fake data (Phase 3). Checks the minibatch update returns
+T1: one PPO update on fake data. Checks the minibatch update returns
 finite losses, logs approx_kl / clip fraction / explained variance / passes run,
 clips gradients to <= 0.5, and that the linear LR schedule decays to 0 and resumes
 from its saved step. No Godot: the data dict is hand-built like join_and_normalize
@@ -67,15 +67,15 @@ def test_one_update_logs_finite_and_in_range():
     info = update_from_data(ac, data, pi_opt, vf_opt, target_kl=0.02,
                             minibatch_size=256, n_passes=10, ent_coef=0.005)
 
-    for k in ("LossPi", "LossV", "KL", "Entropy", "ClipFrac",
-              "ExplainedVariance", "PassesRun"):
+    for k in ('LossPi', 'LossV', 'KL', 'Entropy', 'ClipFrac',
+              'ExplainedVariance', 'PassesRun'):
         assert k in info
-    assert math.isfinite(info["LossPi"])
-    assert math.isfinite(info["LossV"])
-    assert math.isfinite(info["KL"])
-    assert 0.0 <= info["ClipFrac"] <= 1.0
-    assert math.isfinite(info["ExplainedVariance"])
-    assert 1 <= info["PassesRun"] <= 10
+    assert math.isfinite(info['LossPi'])
+    assert math.isfinite(info['LossV'])
+    assert math.isfinite(info['KL'])
+    assert 0.0 <= info['ClipFrac'] <= 1.0
+    assert math.isfinite(info['ExplainedVariance'])
+    assert 1 <= info['PassesRun'] <= 10
 
 
 def test_gradients_are_clipped_to_half():
@@ -97,7 +97,7 @@ def test_gradients_are_clipped_to_half():
     pi_params = list(ac.pi_net.parameters()) + [ac.log_std]
     pi_opt.zero_grad()
     loss_pi, pi_info = compute_loss_pi(ac, data)
-    (loss_pi - 0.005 * pi_info["ent_tensor"]).backward()
+    (loss_pi - 0.005 * pi_info['ent_tensor']).backward()
     torch.nn.utils.clip_grad_norm_(pi_params, 0.5)
     pi_norm = math.sqrt(sum(float(p.grad.pow(2).sum()) for p in pi_params if p.grad is not None))
     assert pi_norm <= 0.5 + 1e-4
@@ -115,7 +115,7 @@ def test_lr_decays_linearly_then_holds_at_floor():
     Docstring for test_lr_decays_linearly_then_holds_at_floor:
 
     the schedule ramps both LRs down from their base, but never below 30% of
-    the base (Phase 10 LR floor), holding there for the rest of the run.
+    the base (the LR floor), holding there for the rest of the run.
     """
     ac, pi_opt, vf_opt = make_ac_and_opts(pi_lr=3e-4, vf_lr=1e-3)
     epochs = 10
@@ -123,12 +123,12 @@ def test_lr_decays_linearly_then_holds_at_floor():
     floor = Linear_lr_schedule.DEFAULT_FLOOR_FRAC
 
     # step 0: full LR
-    assert pi_opt.param_groups[0]["lr"] == pytest.approx(3e-4)
-    assert vf_opt.param_groups[0]["lr"] == pytest.approx(1e-3)
+    assert pi_opt.param_groups[0]['lr'] == pytest.approx(3e-4)
+    assert vf_opt.param_groups[0]['lr'] == pytest.approx(1e-3)
 
     lrs = []
     for _ in range(epochs):
-        lrs.append(pi_opt.param_groups[0]["lr"])
+        lrs.append(pi_opt.param_groups[0]['lr'])
         sched.advance()
 
     # monotonically non-increasing
@@ -138,8 +138,8 @@ def test_lr_decays_linearly_then_holds_at_floor():
     for lr in lrs:
         assert lr >= 3e-4 * floor - 1e-12
     # the final LR is pinned at the floor, not at ~0
-    assert pi_opt.param_groups[0]["lr"] == pytest.approx(3e-4 * floor)
-    assert vf_opt.param_groups[0]["lr"] == pytest.approx(1e-3 * floor)
+    assert pi_opt.param_groups[0]['lr'] == pytest.approx(3e-4 * floor)
+    assert vf_opt.param_groups[0]['lr'] == pytest.approx(1e-3 * floor)
     # a point still on the ramp (before the floor bites) follows the linear rule
     assert lrs[2] == pytest.approx(3e-4 * (epochs - 2) / epochs)
 
@@ -158,18 +158,18 @@ def test_lr_step_saves_and_resumes_mid_decay(tmp_path):
         sched.advance()
     assert sched.step_count == 4
 
-    path = str(tmp_path / "mid.pt")
+    path = str(tmp_path / 'mid.pt')
     save_checkpoint(path, ac, pi_opt, vf_opt, epoch=3, lr_step=sched.step_count)
     ckpt = load_checkpoint(path)
-    assert ckpt["lr_step"] == 4
+    assert ckpt['lr_step'] == 4
 
     # a resumed schedule built from the saved step gives the same LR, not the base
     ac2, pi2, vf2 = make_ac_and_opts(pi_lr=3e-4, vf_lr=1e-3)
     sched2 = Linear_lr_schedule([pi2, vf2], [3e-4, 1e-3], total=epochs,
-                                step=ckpt["lr_step"])
-    assert pi2.param_groups[0]["lr"] == pytest.approx(pi_opt.param_groups[0]["lr"])
-    assert pi2.param_groups[0]["lr"] == pytest.approx(3e-4 * (epochs - 4) / epochs)
-    assert pi2.param_groups[0]["lr"] < 3e-4   # not snapped back to full
+                                step=ckpt['lr_step'])
+    assert pi2.param_groups[0]['lr'] == pytest.approx(pi_opt.param_groups[0]['lr'])
+    assert pi2.param_groups[0]['lr'] == pytest.approx(3e-4 * (epochs - 4) / epochs)
+    assert pi2.param_groups[0]['lr'] < 3e-4   # not snapped back to full
 
 
 def test_batch_smaller_than_minibatch_runs():
@@ -181,8 +181,8 @@ def test_batch_smaller_than_minibatch_runs():
     ac, pi_opt, vf_opt = make_ac_and_opts()
     data = fake_data(100, ac)   # < 256
     info = update_from_data(ac, data, pi_opt, vf_opt, minibatch_size=256, n_passes=3)
-    assert info["PassesRun"] >= 1
-    assert math.isfinite(info["LossPi"])
+    assert info['PassesRun'] >= 1
+    assert math.isfinite(info['LossPi'])
 
 
 def test_batch_exactly_divisible_by_minibatch():
@@ -194,8 +194,8 @@ def test_batch_exactly_divisible_by_minibatch():
     ac, pi_opt, vf_opt = make_ac_and_opts()
     data = fake_data(512, ac)   # 256 + 256, no remainder
     info = update_from_data(ac, data, pi_opt, vf_opt, minibatch_size=256, n_passes=2)
-    assert info["PassesRun"] >= 1
-    assert math.isfinite(info["LossV"])
+    assert info['PassesRun'] >= 1
+    assert math.isfinite(info['LossV'])
 
 
 def test_kl_early_stop_on_first_pass():
@@ -213,7 +213,7 @@ def test_kl_early_stop_on_first_pass():
         for p in ac.pi_net.parameters():
             p.add_(0.5 * torch.randn_like(p))
     info = update_from_data(ac, data, pi_opt, vf_opt, target_kl=1e-9, n_passes=10)
-    assert info["PassesRun"] == 0
+    assert info['PassesRun'] == 0
 
 
 def test_explained_variance_bounds():

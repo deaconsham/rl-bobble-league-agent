@@ -31,27 +31,27 @@ def test_epoch_saves_land_in_run_dir_not_shared(tmp_path, monkeypatch):
     """
     Docstring for test_epoch_saves_land_in_run_dir_not_shared:
 
-    T2 (Phase 14 bug B): the periodic ppo_epoch_<N>.pt saves must follow the
+    T2: the periodic ppo_epoch_<N>.pt saves must follow the
     run's own folder (the directory of --best-path), NOT the shared
-    bobble_model/checkpoints/. In long run 2 best_p14.pt went to
+    bobble_model/Models/. In long run 2 best_p14.pt went to
     p14_run/checkpoints/ while the epoch saves went to the shared dir, so two runs
     could overwrite each other's saves.
     """
     monkeypatch.chdir(tmp_path)
-    run_ckpt = tmp_path / "p14_run" / "checkpoints"
-    best_path = str(run_ckpt / "best_p14.pt")
+    run_ckpt = tmp_path / 'p14_run' / 'checkpoints'
+    best_path = str(run_ckpt / 'best_p14.pt')
 
     vec = make_vec(tmp_path, n_games=6, goal_after=3)
     ppo_train(vec_env=vec, epochs=2, steps_per_epoch=60, save_freq=1,
-              device="cpu", log_dir=str(tmp_path / "runs"),
+              device='cpu', log_dir=str(tmp_path / 'runs'),
               best_path=best_path, train_pi_iters=3, train_v_iters=3)
 
     # epoch saves landed in the RUN dir
-    assert os.path.exists(run_ckpt / "ppo_epoch_0.pt")
-    assert os.path.exists(run_ckpt / "ppo_epoch_1.pt")
-    assert load_checkpoint(str(run_ckpt / "ppo_epoch_1.pt"))["epoch"] == 1
-    # and NOT in the shared checkpoints/ dir (it should not even be created here)
-    assert not os.path.exists(tmp_path / "checkpoints" / "ppo_epoch_0.pt")
+    assert os.path.exists(run_ckpt / 'ppo_epoch_0.pt')
+    assert os.path.exists(run_ckpt / 'ppo_epoch_1.pt')
+    assert load_checkpoint(str(run_ckpt / 'ppo_epoch_1.pt'))['epoch'] == 1
+    # and NOT in the shared Models/ dir (it should not even be created here)
+    assert not os.path.exists(tmp_path / 'Models' / 'ppo_epoch_0.pt')
 
 
 def test_checkpoint_dir_overrides_best_path_dir(tmp_path, monkeypatch):
@@ -62,61 +62,61 @@ def test_checkpoint_dir_overrides_best_path_dir(tmp_path, monkeypatch):
     --best-path points elsewhere.
     """
     monkeypatch.chdir(tmp_path)
-    best_path = str(tmp_path / "bestonly" / "best.pt")
-    ckpt_dir = tmp_path / "epochs_here"
+    best_path = str(tmp_path / 'bestonly' / 'best.pt')
+    ckpt_dir = tmp_path / 'epochs_here'
 
     vec = make_vec(tmp_path, n_games=6, goal_after=3)
     ppo_train(vec_env=vec, epochs=1, steps_per_epoch=60, save_freq=1,
-              device="cpu", log_dir=str(tmp_path / "runs"),
+              device='cpu', log_dir=str(tmp_path / 'runs'),
               best_path=best_path, checkpoint_dir=str(ckpt_dir),
               train_pi_iters=3, train_v_iters=3)
 
-    assert os.path.exists(ckpt_dir / "ppo_epoch_0.pt")
-    assert not os.path.exists(tmp_path / "bestonly" / "ppo_epoch_0.pt")
+    assert os.path.exists(ckpt_dir / 'ppo_epoch_0.pt')
+    assert not os.path.exists(tmp_path / 'bestonly' / 'ppo_epoch_0.pt')
 
 
-def test_default_best_path_keeps_shared_checkpoints_dir(tmp_path, monkeypatch):
+def test_default_best_path_keeps_shared_models_dir(tmp_path, monkeypatch):
     """
-    Docstring for test_default_best_path_keeps_shared_checkpoints_dir:
+    Docstring for test_default_best_path_keeps_shared_models_dir:
 
-    T2: with the default best_path ('checkpoints/best.pt') epoch saves still
-    land in checkpoints/ - the fix must not change the default-path behaviour the
+    T2: with the default best_path ('Models/best.pt') epoch saves still
+    land in Models/ - the fix must not change the default-path behaviour the
     other mock tests rely on.
     """
     monkeypatch.chdir(tmp_path)
     vec = make_vec(tmp_path, n_games=6, goal_after=3)
     ppo_train(vec_env=vec, epochs=1, steps_per_epoch=60, save_freq=1,
-              device="cpu", log_dir=str(tmp_path / "runs"),
+              device='cpu', log_dir=str(tmp_path / 'runs'),
               train_pi_iters=3, train_v_iters=3)
-    assert os.path.exists("checkpoints/ppo_epoch_0.pt")
+    assert os.path.exists('Models/ppo_epoch_0.pt')
 
 
 def test_two_epochs_then_resume(tmp_path, monkeypatch):
-    # checkpoints land under tmp_path/checkpoints
+    # checkpoints land under tmp_path/Models
     monkeypatch.chdir(tmp_path)
 
     vec = make_vec(tmp_path, n_games=6, goal_after=3)
     ppo_train(vec_env=vec, epochs=2, steps_per_epoch=60,  # 10 steps each over 6 games
-              save_freq=1, device="cpu", log_dir=str(tmp_path / "runs"),
+              save_freq=1, device='cpu', log_dir=str(tmp_path / 'runs'),
               train_pi_iters=3, train_v_iters=3)
 
-    assert os.path.exists("checkpoints/ppo_epoch_0.pt")
-    assert os.path.exists("checkpoints/ppo_epoch_1.pt")
+    assert os.path.exists('Models/ppo_epoch_0.pt')
+    assert os.path.exists('Models/ppo_epoch_1.pt')
 
-    ckpt = load_checkpoint("checkpoints/ppo_epoch_1.pt")
-    assert ckpt["epoch"] == 1
-    assert "pi_optimizer" in ckpt and "vf_optimizer" in ckpt
+    ckpt = load_checkpoint('Models/ppo_epoch_1.pt')
+    assert ckpt['epoch'] == 1
+    assert 'pi_optimizer' in ckpt and 'vf_optimizer' in ckpt
 
     # resume: a fresh vec env, pick up from epoch 1's save, ask for 3 epochs total
     vec2 = make_vec(tmp_path, n_games=6, goal_after=3)
     ppo_train(vec_env=vec2, epochs=3, steps_per_epoch=60,
-              save_freq=1, device="cpu", log_dir=str(tmp_path / "runs2"),
-              resume="checkpoints/ppo_epoch_1.pt",
+              save_freq=1, device='cpu', log_dir=str(tmp_path / 'runs2'),
+              resume='Models/ppo_epoch_1.pt',
               train_pi_iters=3, train_v_iters=3)
 
     # resume continued at epoch 2 (only epoch 2's save is new from this run)
-    assert os.path.exists("checkpoints/ppo_epoch_2.pt")
-    assert load_checkpoint("checkpoints/ppo_epoch_2.pt")["epoch"] == 2
+    assert os.path.exists('Models/ppo_epoch_2.pt')
+    assert load_checkpoint('Models/ppo_epoch_2.pt')['epoch'] == 2
 
 
 def test_resume_restores_pool(tmp_path, monkeypatch):
@@ -124,18 +124,18 @@ def test_resume_restores_pool(tmp_path, monkeypatch):
     vec = make_vec(tmp_path, n_games=6, goal_after=3, with_pool=True)
     # snapshot_freq=1 so the pool gets a snapshot after epoch 0
     ppo_train(vec_env=vec, epochs=2, steps_per_epoch=60, save_freq=1,
-              snapshot_freq=1, device="cpu", log_dir=str(tmp_path / "runs"),
+              snapshot_freq=1, device='cpu', log_dir=str(tmp_path / 'runs'),
               train_pi_iters=2, train_v_iters=2)
-    ckpt = load_checkpoint("checkpoints/ppo_epoch_1.pt")
-    assert "pool" in ckpt
-    assert len(ckpt["pool"]["snapshots"]) >= 1
+    ckpt = load_checkpoint('Models/ppo_epoch_1.pt')
+    assert 'pool' in ckpt
+    assert len(ckpt['pool']['snapshots']) >= 1
 
 
-def test_phase11_full_config_runs_and_saves_value_norm(tmp_path, monkeypatch):
+def test_full_config_runs_and_saves_value_norm(tmp_path, monkeypatch):
     """
-    Docstring for test_phase11_full_config_runs_and_saves_value_norm:
+    Docstring for test_full_config_runs_and_saves_value_norm:
 
-    T2: a short run with every Phase 11 knob on (value norm, separate critic
+    T2: a short run with every critic/self-play setting on (value norm, separate critic
     passes, 4 large minibatches, a mean-only KL teacher) runs end to end on mock
     games and writes checkpoints whose value_norm stats are populated (count past
     its epsilon start, so at least one batch was folded in).
@@ -150,27 +150,27 @@ def test_phase11_full_config_runs_and_saves_value_norm(tmp_path, monkeypatch):
     teacher = Actor_critic_neural_network(obs_dim=14, act_dim=6)
     pi_opt = Adam(list(teacher.pi_net.parameters()) + [teacher.log_std], lr=3e-4)
     vf_opt = Adam(teacher.v_net.parameters(), lr=1e-3)
-    teacher_path = str(tmp_path / "warm.pt")
+    teacher_path = str(tmp_path / 'warm.pt')
     save_checkpoint(teacher_path, teacher, pi_opt, vf_opt, epoch=0, lr_step=0)
 
     vec = make_vec(tmp_path, n_games=6, goal_after=3)
     ppo_train(vec_env=vec, epochs=2, steps_per_epoch=120, save_freq=1,
-              device="cpu", log_dir=str(tmp_path / "runs"),
+              device='cpu', log_dir=str(tmp_path / 'runs'),
               value_norm=True, n_passes=5, n_passes_v=10, n_minibatches=4,
               clip_ratio=0.15, kl_warm_start=teacher_path, kl_coef=1.0,
               kl_fade_fraction=0.5, weight_decay=1e-4)
 
-    ckpt = load_checkpoint("checkpoints/ppo_epoch_1.pt")
-    assert "value_norm" in ckpt
+    ckpt = load_checkpoint('Models/ppo_epoch_1.pt')
+    assert 'value_norm' in ckpt
     # the normalizer saw real data: count grew past its tiny epsilon start
-    assert ckpt["value_norm"]["count"] > 1.0
+    assert ckpt['value_norm']['count'] > 1.0
 
 
-def test_phase11_layernorm_full_config_runs_and_saves(tmp_path, monkeypatch):
+def test_layernorm_full_config_runs_and_saves(tmp_path, monkeypatch):
     """
-    Docstring for test_phase11_layernorm_full_config_runs_and_saves:
+    Docstring for test_layernorm_full_config_runs_and_saves:
 
-    T2 (step 5): the same Phase 11 knobs but with LayerNorm on. The warm-start
+    T2: the same settings but with LayerNorm on. The warm-start
     teacher must be built with LayerNorm too, because LayerNorm changes the saved
     weight shape and a plain teacher would not load into the LayerNorm learner.
     The run completes on mock games and still writes value_norm stats, so the
@@ -186,27 +186,27 @@ def test_phase11_layernorm_full_config_runs_and_saves(tmp_path, monkeypatch):
     teacher = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
     pi_opt = Adam(list(teacher.pi_net.parameters()) + [teacher.log_std], lr=3e-4)
     vf_opt = Adam(teacher.v_net.parameters(), lr=1e-3)
-    teacher_path = str(tmp_path / "warm_ln.pt")
+    teacher_path = str(tmp_path / 'warm_ln.pt')
     save_checkpoint(teacher_path, teacher, pi_opt, vf_opt, epoch=0, lr_step=0)
 
     vec = make_vec(tmp_path, n_games=6, goal_after=3)
     ppo_train(vec_env=vec, epochs=2, steps_per_epoch=120, save_freq=1,
-              device="cpu", log_dir=str(tmp_path / "runs"),
+              device='cpu', log_dir=str(tmp_path / 'runs'),
               use_layernorm=True, weight_decay=1e-4,
               value_norm=True, n_passes=5, n_passes_v=10, n_minibatches=4,
               clip_ratio=0.15, kl_warm_start=teacher_path, kl_coef=1.0,
               kl_fade_fraction=0.5)
 
-    ckpt = load_checkpoint("checkpoints/ppo_epoch_1.pt")
-    assert "value_norm" in ckpt
-    assert ckpt["value_norm"]["count"] > 1.0
+    ckpt = load_checkpoint('Models/ppo_epoch_1.pt')
+    assert 'value_norm' in ckpt
+    assert ckpt['value_norm']['count'] > 1.0
     # the saved net is a LayerNorm net: it loads into a LayerNorm AC and refuses a plain one
     ac_ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
-    ac_ln.load_state_dict(ckpt["model"])  # must not raise
+    ac_ln.load_state_dict(ckpt['model'])  # must not raise
     ac_plain = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=False)
     import pytest
     with pytest.raises(RuntimeError):
-        ac_plain.load_state_dict(ckpt["model"])
+        ac_plain.load_state_dict(ckpt['model'])
 
 
 def test_single_game_shaping_fade(tmp_path, monkeypatch):
@@ -222,7 +222,7 @@ def test_single_game_shaping_fade(tmp_path, monkeypatch):
     from bobble_league_env import Bobble_league_env
 
     monkeypatch.chdir(tmp_path)
-    path = str(tmp_path / "shm.dat")
+    path = str(tmp_path / 'shm.dat')
     game = Mock_godot(path, goal_after=3, scorer=1)
     made = {}
 
@@ -233,20 +233,20 @@ def test_single_game_shaping_fade(tmp_path, monkeypatch):
                                 max_ep_len=max_ep_len, step_timeout=step_timeout,
                                 bridge=bridge, random_start_prob=random_start_prob,
                                 gamma=gamma, **kwargs)
-        made["env"] = env
+        made['env'] = env
         return env
 
     try:
         ppo_train(env_fn=env_fn, games=1, epochs=2, steps_per_epoch=30,
-                  save_freq=1, device="cpu", log_dir=str(tmp_path / "runs"),
+                  save_freq=1, device='cpu', log_dir=str(tmp_path / 'runs'),
                   step_timeout=5.0, max_ep_len=30, shaping_fade=True,
                   shaping_fade_fraction=0.5, train_pi_iters=2, train_v_iters=2)
         # it ran without AttributeError and wrote a checkpoint
-        assert os.path.exists("checkpoints/ppo_epoch_0.pt")
+        assert os.path.exists('Models/ppo_epoch_0.pt')
         # the fade reached the wrapped env: epoch 1 of 2 with fraction 0.5 scales
         # the per-turn shaping to 0, so the shaping weights are below their base
-        cfg = made["env"].reward_config
+        cfg = made['env'].reward_config
         assert cfg.ball_to_goal == 0.0 and cfg.players_to_ball == 0.0
     finally:
-        made.get("env") and made["env"].close()
+        made.get('env') and made['env'].close()
         game.stop()

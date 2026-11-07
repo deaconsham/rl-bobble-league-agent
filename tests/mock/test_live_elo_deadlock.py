@@ -1,11 +1,11 @@
 """
-T2 regression for the Phase 12 live-Elo decade-boundary deadlock (review item).
+T2 regression for the live-Elo decade-boundary deadlock.
 
 The in-run live-Elo eval drove a LONG-LIVED spare Godot game with the TRAINING
 step_timeout (120 s) and, unlike Vector_env, had NO hang-restart: when the spare
 game wedged at a decade boundary the eval kept hammering the same dead game, so
 one check cost n_games * anchors * step_timeout of idle polling (the "deadlock",
-seen at epochs 60 and 70 in Phase 12). The fix makes the eval resilient like
+seen at epochs 60 and 70). The fix makes the eval resilient like
 Vector_env:
 
   - a wedged game is RELAUNCHED once (a fresh env), then the eval carries on;
@@ -48,10 +48,10 @@ def test_wedged_spare_game_bails_out_fast_without_relaunch(tmp_path):
     in BOUNDED time (max_hangs), not wait a full timeout on every one of n_games.
     Before the fix this ground through n_games * step_timeout.
     """
-    shm = str(tmp_path / "live_elo.dat")
+    shm = str(tmp_path / 'live_elo.dat')
     mock = Mock_godot(shm, goal_after=3, step_delay=0.02)
     env = _env_on(shm, step_timeout=0.3)
-    anchors = {"chaser": make_test_opponent("chaser")}
+    anchors = {'chaser': make_test_opponent('chaser')}
 
     # wedge the game almost immediately so the first real turn times out
     mock.set_hang(True)
@@ -65,8 +65,8 @@ def test_wedged_spare_game_bails_out_fast_without_relaunch(tmp_path):
     # 20 games at a 0.3 s timeout would be ~6 s if it hammered each one; the fix
     # bails after max_hangs (2) timeouts, so well under 2 s, and every game is a
     # draw (the game never answered).
-    assert dt < 2.0, f"did not bail out fast: {dt:.2f}s"
-    assert rec["chaser"] == (0, 0, 20)
+    assert dt < 2.0, f'did not bail out fast: {dt:.2f}s'
+    assert rec['chaser'] == (0, 0, 20)
     mock.stop()
     for e in (env, env2):
         try:
@@ -83,11 +83,11 @@ def test_check_budget_caps_the_whole_check(tmp_path):
     draws, instead of playing any turn. This is the backstop that bounds one
     live-Elo check even with no launcher to relaunch a wedged game.
     """
-    shm = str(tmp_path / "live_elo.dat")
+    shm = str(tmp_path / 'live_elo.dat')
     mock = Mock_godot(shm, goal_after=3, step_delay=0.02)
     env = _env_on(shm, step_timeout=0.3)
-    anchors = {"chaser": make_test_opponent("chaser"),
-               "defender": make_test_opponent("defender")}
+    anchors = {'chaser': make_test_opponent('chaser'),
+               'defender': make_test_opponent('defender')}
 
     t0 = time.time()
     env2, rec = live_elo.score_vs_anchors(env, _state(), anchors, n_games=20,
@@ -95,10 +95,10 @@ def test_check_budget_caps_the_whole_check(tmp_path):
                                           deadline=time.monotonic() - 1.0)  # already past
     dt = time.time() - t0
 
-    assert dt < 0.5, f"deadline did not short-circuit: {dt:.2f}s"
+    assert dt < 0.5, f'deadline did not short-circuit: {dt:.2f}s'
     # every game of both anchors scored a draw with no turns played
-    assert rec["chaser"] == (0, 0, 20)
-    assert rec["defender"] == (0, 0, 20)
+    assert rec['chaser'] == (0, 0, 20)
+    assert rec['defender'] == (0, 0, 20)
     mock.stop()
     for e in (env, env2):
         try:
@@ -122,7 +122,7 @@ def test_relaunch_recovers_and_keeps_scoring(tmp_path):
     launcher.launch_all()
     shm = launcher.shm_paths[0]
     env = _env_on(shm, step_timeout=0.3)
-    anchors = {"chaser": make_test_opponent("chaser")}
+    anchors = {'chaser': make_test_opponent('chaser')}
 
     # wedge the only game so the first real turn hangs
     launcher.games[0].set_hang(True)
@@ -144,11 +144,11 @@ def test_relaunch_recovers_and_keeps_scoring(tmp_path):
                                           abs_std=None, relaunch=relaunch,
                                           deadline=time.monotonic() + 30)
 
-    w, l, d = rec["chaser"]
+    w, l, d = rec['chaser']
     # the relaunched game is healthy, so most of the 10 games actually PLAY to a
     # result (win or loss), proving the eval recovered rather than drawing out.
-    assert (w + l) >= 5, f"relaunch did not recover enough games: {rec}"
-    assert launcher.launch_counts[0] == 2, "spare game was not relaunched exactly once"
+    assert (w + l) >= 5, f'relaunch did not recover enough games: {rec}'
+    assert launcher.launch_counts[0] == 2, 'spare game was not relaunched exactly once'
     try:
         env2.close()
     except Exception:

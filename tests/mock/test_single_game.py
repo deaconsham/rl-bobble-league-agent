@@ -19,13 +19,13 @@ def make_env(path, **mock_kwargs):
 
 
 def test_reset_then_steps_then_goal(tmp_path):
-    path = str(tmp_path / "shm.dat")
+    path = str(tmp_path / 'shm.dat')
     game, env = make_env(path, goal_after=3, scorer=1)
     try:
         obs, info = env.reset()
         assert obs.shape == (14,)
-        assert info["play_mode"] == "AI_VS_AI"
-        assert info["learner_team"] == 1
+        assert info['play_mode'] == 'AI_VS_AI'
+        assert info['learner_team'] == 1
 
         action = np.zeros(6, dtype=np.float32)
         obs, r, terminated, truncated, step_info = env.step(action)
@@ -34,8 +34,8 @@ def test_reset_then_steps_then_goal(tmp_path):
         assert not terminated  # turn 2 of 3
         obs, r, terminated, truncated, step_info = env.step(action)
         assert terminated       # turn 3 scores
-        assert step_info["goal_reward"] == pytest.approx(1.0)
-        assert step_info["scorer"] == 1
+        assert step_info['goal_reward'] == pytest.approx(1.0)
+        assert step_info['scorer'] == 1
 
         # the game resets cleanly for the next episode
         obs, info = env.reset()
@@ -46,7 +46,7 @@ def test_reset_then_steps_then_goal(tmp_path):
 
 
 def test_opponent_scores_gives_negative_reward(tmp_path):
-    path = str(tmp_path / "shm.dat")
+    path = str(tmp_path / 'shm.dat')
     game, env = make_env(path, goal_after=2, scorer=2)
     try:
         env.reset()
@@ -54,15 +54,15 @@ def test_opponent_scores_gives_negative_reward(tmp_path):
         env.step(action)
         _, r, terminated, _, step_info = env.step(action)
         assert terminated
-        assert step_info["goal_reward"] == pytest.approx(-1.0)
-        assert step_info["scorer"] == 2
+        assert step_info['goal_reward'] == pytest.approx(-1.0)
+        assert step_info['scorer'] == 2
     finally:
         env.close()
         game.stop()
 
 
 def test_hang_times_out(tmp_path):
-    path = str(tmp_path / "shm.dat")
+    path = str(tmp_path / 'shm.dat')
     game, env = make_env(path, goal_after=10)
     try:
         env.reset()
@@ -76,10 +76,10 @@ def test_hang_times_out(tmp_path):
 
 
 def test_old_protocol_mock_is_refused(tmp_path):
-    path = str(tmp_path / "shm.dat")
+    path = str(tmp_path / 'shm.dat')
     game = Mock_godot(path, protocol_version=1)
     try:
-        with pytest.raises(RuntimeError, match="protocol v1"):
+        with pytest.raises(RuntimeError, match='protocol v1'):
             Shared_memory_link(path=path, create=False)
     finally:
         game.stop()

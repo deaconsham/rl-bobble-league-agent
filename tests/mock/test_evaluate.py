@@ -21,44 +21,44 @@ from mock_godot import Mock_godot
 
 
 def test_latest_checkpoint_picks_highest_epoch(tmp_path):
-    folder = tmp_path / "checkpoints"
+    folder = tmp_path / 'Models'
     folder.mkdir()
     for epoch in (0, 5, 10, 199):
-        (folder / f"ppo_epoch_{epoch}.pt").write_bytes(b"x")
+        (folder / f'ppo_epoch_{epoch}.pt').write_bytes(b'x')
     chosen = latest_checkpoint(str(folder))
-    assert chosen.endswith("ppo_epoch_199.pt")
+    assert chosen.endswith('ppo_epoch_199.pt')
 
 
 def test_latest_checkpoint_raises_when_empty(tmp_path):
-    folder = tmp_path / "empty"
+    folder = tmp_path / 'empty'
     folder.mkdir()
     with pytest.raises(FileNotFoundError):
         latest_checkpoint(str(folder))
 
 
 def test_default_model_prefers_best_final(tmp_path):
-    folder = tmp_path / "checkpoints"
+    folder = tmp_path / 'Models'
     folder.mkdir()
     for epoch in (0, 10, 199):
-        (folder / f"ppo_epoch_{epoch}.pt").write_bytes(b"x")
-    (folder / "best_final.pt").write_bytes(b"x")
+        (folder / f'ppo_epoch_{epoch}.pt').write_bytes(b'x')
+    (folder / 'best_final.pt').write_bytes(b'x')
     chosen = default_model(str(folder))
-    assert chosen.endswith("best_final.pt")
+    assert chosen.endswith('best_final.pt')
 
 
 def test_default_model_falls_back_to_newest_epoch(tmp_path):
-    folder = tmp_path / "checkpoints"
+    folder = tmp_path / 'Models'
     folder.mkdir()
     for epoch in (0, 10, 199):
-        (folder / f"ppo_epoch_{epoch}.pt").write_bytes(b"x")
+        (folder / f'ppo_epoch_{epoch}.pt').write_bytes(b'x')
     chosen = default_model(str(folder))
-    assert chosen.endswith("ppo_epoch_199.pt")
+    assert chosen.endswith('ppo_epoch_199.pt')
 
 
 def test_evaluate_plays_a_few_games(tmp_path):
     # save a small random network the way training does (tagged action_format),
     # then load it the way evaluate does
-    ckpt = str(tmp_path / "ppo_epoch_0.pt")
+    ckpt = str(tmp_path / 'ppo_epoch_0.pt')
     net = Actor_critic_neural_network(obs_dim=14, act_dim=6)
     pi_opt = Adam(list(net.pi_net.parameters()) + [net.log_std], lr=3e-4)
     vf_opt = Adam(net.v_net.parameters(), lr=1e-3)
@@ -66,12 +66,12 @@ def test_evaluate_plays_a_few_games(tmp_path):
 
     agent = PolicyOpponent(load_state_dict(ckpt), deterministic=True, name=ckpt)
 
-    path = str(tmp_path / "shm.dat")
+    path = str(tmp_path / 'shm.dat')
     game = Mock_godot(path, goal_after=2, scorer=1)
     bridge = Shared_memory_link(path=path, create=False)
     env = Bobble_league_env(opponent=None, bridge=bridge, step_timeout=5.0, max_ep_len=50)
 
-    results = {"win": 0, "loss": 0, "timeout": 0}
+    results = {'win': 0, 'loss': 0, 'timeout': 0}
     try:
         obs, info = env.reset()
         for _ in range(3):  # three short games
@@ -80,8 +80,8 @@ def test_evaluate_plays_a_few_games(tmp_path):
                 action = agent.act(env._raw_obs)
                 assert action.shape == (6,)
                 obs, r, terminated, truncated, step_info = env.step(action)
-            scorer = step_info["scorer"] if terminated else 0
-            outcome = "win" if scorer == 1 else "loss" if scorer == 2 else "timeout"
+            scorer = step_info['scorer'] if terminated else 0
+            outcome = 'win' if scorer == 1 else 'loss' if scorer == 2 else 'timeout'
             results[outcome] += 1
             obs, info = env.reset()
     finally:
@@ -89,4 +89,4 @@ def test_evaluate_plays_a_few_games(tmp_path):
         game.stop()
 
     assert sum(results.values()) == 3
-    assert results["win"] == 3  # mock always lets the learner score
+    assert results['win'] == 3  # mock always lets the learner score

@@ -1,5 +1,5 @@
 """
-T2 (Phase 5): live-vs-live data and turn length through the Vector_env.
+T2: live-vs-live data and turn length through the Vector_env.
 
 Drives mock games with a self-play pool pinned to the live slot and checks that
 every step reports a turn length, and that a live-vs-live game hands back Team B's
@@ -98,7 +98,7 @@ def test_pfsp_win_rate_recorded_through_the_env(tmp_path):
                      step_timeout=5.0)
     try:
         env.reset()
-        assert pool.name == "self"      # drew the frozen copy
+        assert pool.name == 'self'      # drew the frozen copy
         assert pool.last_index == 0
         before = list(pool.win_rates)
         # step until the mock scores (goal_after=3) so a result is recorded

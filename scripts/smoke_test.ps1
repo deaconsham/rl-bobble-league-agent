@@ -1,4 +1,4 @@
-# T4 live smoke test (Phase 0).
+# live smoke test.
 # builds, imports, runs two short headless epochs then a 10-game eval, and
 # checks goals > 0, 0 stuck turns and out-of-bounds no worse than 1 in 10.
 #
@@ -6,10 +6,10 @@
 # so we launch it detached with Start-Process and poll its log file.
 #
 # usage:  powershell -ExecutionPolicy Bypass -File scripts\smoke_test.ps1
-#         -GodotExe "C:\path\to\Godot_...console.exe"   (optional override)
+#         -GodotExe "C:\path\to\Godot_...console.exe"   (default: $env:BOBBLE_GODOT_EXE, else the Desktop build)
 
 param(
-    [string]$GodotExe = "C:\Users\Decon Sham\Desktop\Godot_v4.6.1-stable_mono_win64\Godot_v4.6.1-stable_mono_win64\Godot_v4.6.1-stable_mono_win64_console.exe",
+    [string]$GodotExe = $(if ($env:BOBBLE_GODOT_EXE) { $env:BOBBLE_GODOT_EXE } else { "$env:USERPROFILE\Desktop\Godot_v4.6.1-stable_mono_win64\Godot_v4.6.1-stable_mono_win64\Godot_v4.6.1-stable_mono_win64_console.exe" }),
     [int]$Epochs = 2,
     [int]$StepsPerEpoch = 300,
     [int]$EvalEpisodes = 10,
@@ -72,7 +72,7 @@ try {
     # ---- 4. short training run ----
     Write-Host "== train $Epochs epochs x $StepsPerEpoch steps =="
     Push-Location $model
-    & python training_loop.py --epochs $Epochs --steps-per-epoch $StepsPerEpoch `
+    & python Scripts	raining_loop.py --epochs $Epochs --steps-per-epoch $StepsPerEpoch `
         --opponent chaser --log-dir runs/smoke 2>&1 | Tee-Object -FilePath $trainLog
     $trainCode = $LASTEXITCODE
     Pop-Location
@@ -80,15 +80,15 @@ try {
 
     # ---- 5. eval ----
     # evaluate.py with no --checkpoint picks the highest epoch NUMBER, which may be
-    # a stale pre-Phase-2 checkpoint left in checkpoints/ from an older run. the
+    # a stale checkpoint left in Models/ from an older run. the
     # smoke run just wrote a fresh one, so eval the newest checkpoint BY TIME.
     Write-Host "== eval $EvalEpisodes games vs chaser =="
-    $freshCkpt = Get-ChildItem (Join-Path $model "checkpoints\ppo_epoch_*.pt") |
+    $freshCkpt = Get-ChildItem (Join-Path $model "Models\ppo_epoch_*.pt") |
         Sort-Object LastWriteTime | Select-Object -Last 1
     if (-not $freshCkpt) { Fail "no checkpoint written by training" }
     Write-Host "  using $($freshCkpt.Name)"
     Push-Location $model
-    & python evaluate.py --opponent chaser --episodes $EvalEpisodes --checkpoint $freshCkpt.FullName 2>&1 | Tee-Object -FilePath $evalLog
+    & python Scripts\evaluate.py --opponent chaser --episodes $EvalEpisodes --checkpoint $freshCkpt.FullName 2>&1 | Tee-Object -FilePath $evalLog
     $evalCode = $LASTEXITCODE
     Pop-Location
     if ($evalCode -ne 0) { Fail "evaluate exited $evalCode" }

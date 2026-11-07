@@ -1,5 +1,5 @@
 """
-T2 (Phase 9): league_eval spreads its pairings over several Godot games.
+T2: league_eval spreads its pairings over several Godot games.
 
 Uses mock games (real Shared_memory_link bridges on temp files) to check that
 play_pairings_parallel plays every pairing exactly once over N games, tallies
@@ -28,11 +28,11 @@ def test_every_pairing_played_once_over_four_games(tmp_path):
     launcher.launch_all()
     envs = _envs(launcher, n_games)
 
-    agents = {"a": ChaserOpponent(seed=1), "b": ChaserOpponent(seed=2),
-              "c": ChaserOpponent(seed=3)}
-    anchors = {"still": StillOpponent()}
-    pairings = [("a", "b"), ("a", "c"), ("b", "c"),
-                ("a", "still"), ("b", "still"), ("c", "still")]
+    agents = {'a': ChaserOpponent(seed=1), 'b': ChaserOpponent(seed=2),
+              'c': ChaserOpponent(seed=3)}
+    anchors = {'still': StillOpponent()}
+    pairings = [('a', 'b'), ('a', 'c'), ('b', 'c'),
+                ('a', 'still'), ('b', 'still'), ('c', 'still')]
     try:
         results = play_pairings_parallel(envs, pairings, agents, agents, anchors,
                                          n_games=3, max_ep_len=50)
@@ -55,11 +55,11 @@ def test_parallel_path_handles_more_pairings_than_games(tmp_path):
     launcher.launch_all()
     envs = _envs(launcher, n_games)
 
-    agents = {"a": ChaserOpponent(seed=1), "b": ChaserOpponent(seed=2),
-              "c": ChaserOpponent(seed=3)}
-    anchors = {"still": StillOpponent()}
-    pairings = [("a", "b"), ("a", "c"), ("b", "c"),
-                ("a", "still"), ("b", "still"), ("c", "still")]
+    agents = {'a': ChaserOpponent(seed=1), 'b': ChaserOpponent(seed=2),
+              'c': ChaserOpponent(seed=3)}
+    anchors = {'still': StillOpponent()}
+    pairings = [('a', 'b'), ('a', 'c'), ('b', 'c'),
+                ('a', 'still'), ('b', 'still'), ('c', 'still')]
     try:
         results = play_pairings_parallel(envs, pairings, agents, agents, anchors,
                                          n_games=2, max_ep_len=50)

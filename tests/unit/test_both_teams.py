@@ -1,5 +1,5 @@
 """
-T1 (Phase 5): the both-teams buffer.
+T1: the both-teams buffer.
 
 The opponent (Team B) side of a live-vs-live game goes into an Opponent_buffer,
 which must keep separate paths apart (GAE never bleeds across an episode end) and

@@ -1,5 +1,5 @@
 """
-T2 (Phase 9): async stepping in Vector_env.step. The games no longer run in a
+T2: async stepping in Vector_env.step. The games no longer run in a
 fixed index order; each is collected the moment its turn is done. These tests give
 the mock games very different turn lengths and check that:
 
@@ -46,7 +46,7 @@ def test_fast_games_collected_before_slow_ones(tmp_path):
         assert obs.shape == (4, 14)
         assert len(infos) == 4
         for g in range(4):
-            assert infos[g]["restarted"] is False
+            assert infos[g]['restarted'] is False
         # all four advanced exactly one turn (no lost or doubled turn)
         assert all(env.ep_len[g] == 1 for g in range(4))
         # the step waited for the slow game (~0.3 s) but not 4x that
@@ -67,7 +67,7 @@ def test_no_turn_lost_over_many_steps(tmp_path):
             obs, r, term, trunc, infos = env.step(actions)
             assert obs.shape == (4, 14)
             for g in range(4):
-                assert infos[g]["restarted"] is False
+                assert infos[g]['restarted'] is False
         # goal_after is 20 so no game scored; each game ticked exactly `steps` turns
         assert all(env.ep_len[g] == steps for g in range(4))
     finally:
@@ -87,12 +87,12 @@ def test_crash_mid_turn_restarts_only_that_game(tmp_path):
         obs, r, term, trunc, infos = env.step(actions)
 
         assert trunc[2]
-        assert infos[2]["restarted"] is True
+        assert infos[2]['restarted'] is True
         assert launcher.launch_counts[2] == 2
         assert env.restart_counts[2] == 1
         # the other three were untouched and each ticked their turn
         for g in [0, 1, 3]:
-            assert infos[g]["restarted"] is False
+            assert infos[g]['restarted'] is False
             assert launcher.launch_counts[g] == 1
 
         # the run carries on cleanly after the restart
@@ -128,6 +128,6 @@ def test_game_resets_while_others_mid_turn(tmp_path):
         assert not term[1:].any()
         assert all(env.ep_len[g] == 1 for g in [1, 2, 3])
         for g in range(4):
-            assert infos[g]["restarted"] is False
+            assert infos[g]['restarted'] is False
     finally:
         env.close()

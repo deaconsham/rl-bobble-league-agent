@@ -1,5 +1,5 @@
 """
-T1 (Phase 5): the self-play opponent mix.
+T1: the self-play opponent mix.
 
 Checks that SelfPlayPool.reset() draws the chaser / live / frozen slots in roughly
 the set proportions over 10,000 draws, that the live slot only appears once a live
@@ -41,14 +41,14 @@ def test_mix_matches_the_set_weights_over_10k_draws():
     pool.attach_live(_fresh_net())
     _fill_snapshots(pool, 3)
 
-    counts = {"chaser": 0, "live": 0, "self": 0}
+    counts = {'chaser': 0, 'live': 0, 'self': 0}
     for _ in range(10000):
         pool.reset()
         counts[pool.name] += 1
 
-    chaser = counts["chaser"] / 10000
-    live = counts["live"] / 10000
-    frozen = counts["self"] / 10000
+    chaser = counts['chaser'] / 10000
+    live = counts['live'] / 10000
+    frozen = counts['self'] / 10000
     # targets: 0.15 / 0.30 / 0.55, allow +-0.03 sampling slack
     assert abs(chaser - 0.15) < 0.03, counts
     assert abs(live - 0.30) < 0.03, counts
@@ -65,8 +65,8 @@ def test_live_slot_absent_until_a_net_is_attached():
         pool.reset()
         names.add(pool.name)
     # with no live net it is only chaser or a frozen copy, never "live"
-    assert "live" not in names
-    assert names <= {"chaser", "self"}
+    assert 'live' not in names
+    assert names <= {'chaser', 'self'}
 
 
 def test_is_live_current_tracks_the_live_slot():
@@ -75,13 +75,13 @@ def test_is_live_current_tracks_the_live_slot():
     _fill_snapshots(pool, 2)
     pool.reset()
     # live_prob 1.0 with a live net -> always the live learner
-    assert pool.name == "live"
+    assert pool.name == 'live'
     assert pool.is_live_current() is True
 
     chaser_only = SelfPlayPool(scripted_prob=1.0, live_prob=0.0, hidden=(32, 32), seed=3)
     chaser_only.attach_live(_fresh_net())
     chaser_only.reset()
-    assert chaser_only.name == "chaser"
+    assert chaser_only.name == 'chaser'
     assert chaser_only.is_live_current() is False
 
 
@@ -104,8 +104,8 @@ def test_siblings_share_one_snapshot_list_and_live_net():
         assert sib.live is not None
     siblings[0].current = siblings[0].scripted
     siblings[1].current = siblings[1].live
-    assert siblings[0].name == "chaser"
-    assert siblings[1].name == "live"
+    assert siblings[0].name == 'chaser'
+    assert siblings[1].name == 'live'
 
 
 def test_live_opponent_samples_and_records_its_turn():
@@ -115,10 +115,10 @@ def test_live_opponent_samples_and_records_its_turn():
     a = live.act(raw)
     assert a.shape == (6,)
     assert live.last is not None
-    assert live.last["obs"].shape == (14,)
-    assert live.last["act"].shape == (6,)
-    assert np.isfinite(live.last["val"])
-    assert np.isfinite(live.last["logp"])
+    assert live.last['obs'].shape == (14,)
+    assert live.last['act'].shape == (6,)
+    assert np.isfinite(live.last['val'])
+    assert np.isfinite(live.last['logp'])
 
 
 def test_chaser_output_shape_and_range():
@@ -140,11 +140,11 @@ def test_mix_without_frozen_copies_uses_live_or_chaser():
     for _ in range(2000):
         pool.reset()
         names.add(pool.name)
-    assert names <= {"chaser", "live"}
-    assert "self" not in names  # no frozen copies yet
+    assert names <= {'chaser', 'live'}
+    assert 'self' not in names  # no frozen copies yet
 
 
-# ---- Phase 6: PFSP + held-out test opponents ----
+# ---- PFSP + held-out test opponents ----
 
 def test_pfsp_weights_favour_the_losers():
     # win rates: beats copy0 always, 50/50 copy1, loses to copy2 always
@@ -209,7 +209,7 @@ def test_uniform_selection_when_pfsp_off():
 def test_test_only_opponents_never_enter_the_pool():
     # the held-out set is a known fixed list, and SelfPlayPool only ever plays
     # its chaser / live / a frozen snapshot -> never a defender or replay.
-    assert set(TEST_ONLY_OPPONENTS) == {"random", "chaser", "defender", "replay"}
+    assert set(TEST_ONLY_OPPONENTS) == {'random', 'chaser', 'defender', 'replay'}
     pool = SelfPlayPool(scripted_prob=0.15, live_prob=0.30, hidden=(32, 32),
                         pfsp=True, seed=11)
     pool.attach_live(_fresh_net())
@@ -219,8 +219,8 @@ def test_test_only_opponents_never_enter_the_pool():
         pool.reset()
         names.add(pool.name)
     # only the three training slots ever appear
-    assert names <= {"chaser", "live", "self"}
-    assert "defender" not in names and "replay" not in names
+    assert names <= {'chaser', 'live', 'self'}
+    assert 'defender' not in names and 'replay' not in names
 
 
 def test_make_test_opponent_builds_each_held_out_one():
@@ -228,7 +228,7 @@ def test_make_test_opponent_builds_each_held_out_one():
         opp = make_test_opponent(name, seed=0)
         assert opp.name == name
     with pytest.raises(ValueError):
-        make_test_opponent("not-a-real-opponent")
+        make_test_opponent('not-a-real-opponent')
 
 
 def test_defender_output_shape_and_range():
@@ -281,7 +281,7 @@ def test_policy_std_scale_affects_sampling_spread():
     assert small_dev < wide_dev
 
 
-# ---- Phase 11 step 5: LayerNorm snapshots load into scoring/self-play opponents ----
+# ---- LayerNorm snapshots load into scoring/self-play opponents ----
 
 def test_policy_opponent_auto_detects_layernorm_snapshots():
     """
@@ -311,7 +311,7 @@ def test_self_play_pool_loads_a_layernorm_snapshot():
     Docstring for test_self_play_pool_loads_a_layernorm_snapshot:
 
     A LayerNorm self-play pool seeded with a LayerNorm snapshot plays it on a
-    frozen-copy reset without a shape mismatch (Phase 11 step 5).
+    frozen-copy reset without a shape mismatch.
     """
     ln = Actor_critic_neural_network(obs_dim=14, act_dim=6, use_layernorm=True)
     pool = SelfPlayPool(scripted_prob=0.0, live_prob=0.0, use_layernorm=True, seed=0)
@@ -319,7 +319,7 @@ def test_self_play_pool_loads_a_layernorm_snapshot():
     drew_self = False
     for _ in range(20):
         pool.reset()
-        if pool.name == "self":
+        if pool.name == 'self':
             drew_self = True
             assert pool.act(np.zeros(14, dtype=np.float32)).shape == (6,)
     assert drew_self

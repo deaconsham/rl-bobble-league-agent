@@ -32,12 +32,12 @@ def test_killing_one_restarts_only_that_game(tmp_path):
         obs, r, term, trunc, infos = env.step(actions)
         # game 3 was cut as truncated and restarted
         assert trunc[3]
-        assert infos[3]["restarted"] is True
+        assert infos[3]['restarted'] is True
         assert launcher.launch_counts[3] == 2  # launched once, relaunched once
         assert env.restart_counts[3] == 1
         # the others were not restarted and kept stepping
         for g in [0, 1, 2, 4, 5]:
-            assert infos[g]["restarted"] is False
+            assert infos[g]['restarted'] is False
             assert launcher.launch_counts[g] == 1
 
         # after the restart the run carries on: another clean step over all 6
@@ -64,10 +64,10 @@ def test_killing_two_restarts_both(tmp_path):
 
         obs, r, term, trunc, infos = env.step(actions)
         assert trunc[1] and trunc[4]
-        assert infos[1]["restarted"] and infos[4]["restarted"]
+        assert infos[1]['restarted'] and infos[4]['restarted']
         assert launcher.launch_counts[1] == 2 and launcher.launch_counts[4] == 2
         for g in [0, 2, 3, 5]:
-            assert infos[g]["restarted"] is False
+            assert infos[g]['restarted'] is False
             assert launcher.launch_counts[g] == 1
     finally:
         env.close()

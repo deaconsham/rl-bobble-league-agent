@@ -48,7 +48,7 @@ def test_get_normalizes_advantages(monkeypatch):
     for _ in range(3):
         buf.store([0, 0], [0, 0], rew=1.0, val=0.0, logp=0.0)
     buf.finish_path(last_val=0.0)
-    data = buf.get(device="cpu")
-    adv = data["adv"].numpy()
+    data = buf.get(device='cpu')
+    adv = data['adv'].numpy()
     assert abs(adv.mean()) < 1e-5
     assert adv.std() == pytest.approx(1.0, abs=1e-3)

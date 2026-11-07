@@ -122,6 +122,22 @@ platform/web/node_modules/
 # Misc
 *.debug
 
+#######################
+### AI coding tools ###
+#######################
+
+# agent settings, memory and worktrees (Claude Code keeps its worktrees in .claude/worktrees/)
+.claude/
+CLAUDE.local.md
+.kiro/
+.cursor/
+.windsurf/
+.codex/
+.gemini/
+.continue/
+.aider*
+.worktrees/
+
 #############################
 ### IDE and tool specific ###
 #############################
@@ -421,26 +437,22 @@ temp_data/*
 ### Bobble League RL project ###
 ################################
 
-# One-off / archived test scripts (kept locally for provenance, not tracked).
-# The maintained live tools scripts/smoke_test.ps1 and scripts/proof_live_elo.ps1
-# and the whole tests/ pytest suite stay tracked and are NOT ignored.
-scripts/archive/
-
-# Per-run launch / scratch scripts that live inside a run directory
-bobble_model/**/launch_run.ps1
-bobble_model/**/resume_run.ps1
-bobble_model/**/run_t5.ps1
-bobble_model/**/copy_saves.ps1
-bobble_model/**/kill_godots.ps1
-bobble_model/**/check_eligible.py
-bobble_model/p7_eval.py
-
-# Training run directories and their artifacts (checkpoints, logs, tensorboard)
-bobble_model/checkpoints/
+# training outputs: run folders, logs, tensorboard, old runs
 bobble_model/*_run/
 bobble_model/old_runs/
 bobble_model/runs/
+bobble_model/checkpoints/
 
-# Stale project backups
+# Models/ keeps only the shipped models in git: best_final.pt (to play against)
+# and best_p11_ln.pt (the starting point for fine-tuning)
+bobble_model/Models/*
+!bobble_model/Models/best_final.pt
+!bobble_model/Models/best_p11_ln.pt
+
+# stale project backups
 *.csproj.old
 *.csproj.old.*
+*.blend1
+
+# godot export output (see bobble_league/export_presets.cfg)
+/build/

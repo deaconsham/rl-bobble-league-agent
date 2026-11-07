@@ -1,5 +1,5 @@
 """
-T1: reward shaping. Phase 12 makes the position terms exact potential-based
+T1: reward shaping. The position terms can be exact potential-based
 shaping F = gamma*phi(s') - phi(s), with phi=0 at a goal and the turn after an
 out-of-bounds kickoff skipped. Each term is checked on a hand-made board, the
 telescoping sum over a game is verified, and the goal reward keeps its sign for
@@ -30,8 +30,8 @@ class Dummy_bridge:
 
 
 def make_env(cfg, gamma=0.99, potential_shaping=True):
-    # These tests verify the exact potential-based shaping (Phase 12, step 3),
-    # which is OFF by default since Phase 12 was a T5 miss. Turn it ON here so the
+    # These tests verify the exact potential-based shaping,
+    # which is OFF by default since it lost in T5. Turn it ON here so the
     # PBRS contract stays tested; the legacy-default path has its own test below.
     return Bobble_league_env(reward_config=cfg, bridge=Dummy_bridge(), gamma=gamma,
                              potential_shaping=potential_shaping)
@@ -49,9 +49,8 @@ def test_default_env_uses_legacy_shaping_not_pbrs():
     """
     Docstring for test_default_env_uses_legacy_shaping_not_pbrs:
 
-    A plain env (potential_shaping defaults off) must reproduce the Phase 11
-    shaping, not the Phase 12 potential form. This is the behaviour the Phase 12
-    'features default off' decision guarantees.
+    A plain env (potential_shaping defaults off) must reproduce the original
+    shaping, not the potential form, since that feature ships off.
     """
     cfg = RewardConfig(ball_to_goal=0.5, players_to_ball=0.05, defence=0.02, time_penalty=0.0)
     env = Bobble_league_env(reward_config=cfg, bridge=Dummy_bridge(), gamma=0.99)
@@ -160,7 +159,7 @@ def test_shaping_telescopes_over_a_game():
     Docstring for test_shaping_telescopes_over_a_game:
 
     the discounted sum of F over a game telescopes to gamma^T*phi(end)-phi(start).
-    Phase 12, step 6 T1: this is the defining property of potential-based shaping.
+    This is the defining property of potential-based shaping.
     """
     cfg = RewardConfig(ball_to_goal=0.5, players_to_ball=0.05, defence=0.02, time_penalty=0)
     gamma = 0.97
@@ -197,7 +196,7 @@ def test_goal_scaling_keeps_sign_for_both_teams():
     assert cfg2.goal * 1.0 == 2.0
 
 
-# ---- Phase 6: shaping fade schedule (R39) ----
+# ---- shaping fade schedule ----
 
 def test_scaled_fades_shaping_but_keeps_the_goal_reward():
     cfg = RewardConfig(goal=1.0, ball_to_goal=0.5, players_to_ball=0.05,

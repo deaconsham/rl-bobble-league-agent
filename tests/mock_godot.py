@@ -87,9 +87,9 @@ class Mock_godot:
 
         # create + zero the file, write the version (like SharedMemory boots)
         import mmap
-        with open(self.path, "wb") as f:
+        with open(self.path, 'wb') as f:
             f.write(bytes(TOTAL_SIZE))
-        self._file = open(self.path, "r+b")
+        self._file = open(self.path, 'r+b')
         self.buf = mmap.mmap(self._file.fileno(), TOTAL_SIZE, access=mmap.ACCESS_WRITE)
         self.buf[VERSION_OFFSET] = self.protocol_version
 
@@ -123,13 +123,13 @@ class Mock_godot:
         self._close_file()
 
     def _close_file(self):
-        if getattr(self, "buf", None) is not None:
+        if getattr(self, 'buf', None) is not None:
             try:
                 self.buf.close()
             except Exception:
                 pass
             self.buf = None
-        if getattr(self, "_file", None) is not None:
+        if getattr(self, '_file', None) is not None:
             try:
                 self._file.close()
             except Exception:
@@ -185,7 +185,7 @@ class Mock_godot:
                 else:
                     self._ball = np.zeros(2, dtype=np.float32)
                 self._write_obs()
-                self.buf[REWARD_OFFSET:REWARD_OFFSET + 4] = struct.pack("<f", 0.0)
+                self.buf[REWARD_OFFSET:REWARD_OFFSET + 4] = struct.pack('<f', 0.0)
                 self.buf[DONE_OFFSET] = 0
                 self.buf[SCORER_OFFSET] = 0
                 self.buf[OOB_RESET_OFFSET] = 0
@@ -219,7 +219,7 @@ class Mock_godot:
                     self._ball = np.zeros(2, dtype=np.float32)
 
                 self._write_obs()
-                self.buf[REWARD_OFFSET:REWARD_OFFSET + 4] = struct.pack("<f", reward)
+                self.buf[REWARD_OFFSET:REWARD_OFFSET + 4] = struct.pack('<f', reward)
                 self.buf[DONE_OFFSET] = 1 if done else 0
                 self.buf[SCORER_OFFSET] = scorer
                 self.buf[OOB_RESET_OFFSET] = 0
@@ -228,7 +228,7 @@ class Mock_godot:
                 # fake turn length in game seconds: a small spread so the
                 # turn-length histogram has something to show (real Godot sends simTime)
                 turn_seconds = float(2.0 + 0.5 * (self._turn % 4))
-                self.buf[TURN_SECONDS_OFFSET:TURN_SECONDS_OFFSET + 4] = struct.pack("<f", turn_seconds)
+                self.buf[TURN_SECONDS_OFFSET:TURN_SECONDS_OFFSET + 4] = struct.pack('<f', turn_seconds)
                 self.buf[STEP_REQ_OFFSET] = 0
                 continue
 
@@ -263,7 +263,7 @@ class Mock_launcher:
         # per-game turn length in seconds (default 0 = answer as fast as the thread
         # runs). used by the async-stepping tests to make some games slower.
         self.step_delays = list(step_delays) if step_delays is not None else [0.0] * n_games
-        self.shm_paths = [_os.path.join(self.tmp_dir, f"mmap_{i}.dat") for i in range(n_games)]
+        self.shm_paths = [_os.path.join(self.tmp_dir, f'mmap_{i}.dat') for i in range(n_games)]
         self.games = [None] * n_games
         self.pids = [None] * n_games
         self.launch_counts = [0] * n_games
@@ -299,7 +299,7 @@ class Mock_launcher:
                 return Shared_memory_link(path=self.shm_paths[index], create=False)
             except (RuntimeError, ValueError, FileNotFoundError):
                 _time.sleep(0.02)
-        raise TimeoutError(f"mock game {index} never handshook")
+        raise TimeoutError(f'mock game {index} never handshook')
 
     def kill_game(self, index):
         """
