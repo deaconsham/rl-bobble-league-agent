@@ -202,9 +202,10 @@ The actor outputs the mean $\mu_\theta(o) \in \mathbb{R}^6$ of a
 with a learned standard deviation that doesn't depend on the board. During
 training, actions are sampled; in play, the mean is used.
 
+$$ 
+a \sim \mathcal{N}\left(\mu_\theta(o), \mathrm{diag}(\sigma^2)\right), \qquad \sigma = e^{\log\sigma}, \quad \log\sigma_0 = -1.6 \ (\sigma_0 \approx 0.2) 
 $$
-a \sim \mathcal{N}\left(\mu_\theta(o), \operatorname{diag}(\sigma^2)\right), \qquad \sigma = e^{\log\sigma}, \quad \log\sigma_0 = -1.6 \ (\sigma_0 \approx 0.2)
-$$
+
 
 Each player $i$ gets an angle number $a_i$ and a power number $p_i$. The angle wraps
 around (it's a circle) and the power is clipped:
