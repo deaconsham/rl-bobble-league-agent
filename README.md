@@ -452,15 +452,6 @@ Python 3.12 and 3.14, and builds the C#, on every push and pull request. The liv
 tests and the smoke test need a real Godot, so run them yourself before merging
 physics or bridge changes.
 
-### Code style
-
-- **Every file:** starts with a short comment saying what it does. Comments are
-  short and lowercase.
-- **Python:** `Like_this` class names, snake_case, single quotes, no type hints,
-  docstrings that open with `Docstring for <name>:`.
-- **C#:** Godot's usual naming. Long signatures go one parameter per line.
-- **Spelling:** Canadian English.
-
 ## References
 
 - Achiam. *Spinning Up in Deep Reinforcement Learning* (OpenAI, 2018). [spinningup.openai.com](https://spinningup.openai.com/)
